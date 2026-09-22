@@ -16,4 +16,6 @@ analytical_solution
 oculus_reader
 oculus_reader/oculus_reader
 **/__pycache__/
+.pytest_cache/
+*.py[cod]
 .thumbs

@@ -40,6 +40,7 @@
     <disable_collisions link1="gripper_base" link2="link6" reason="Adjacent"/>
     <disable_collisions link1="gripper_base" link2="link7" reason="Adjacent"/>
     <disable_collisions link1="gripper_base" link2="link8" reason="Adjacent"/>
+    <disable_collisions link1="gripper_base" link2="wrist_depth_camera_link" reason="Adjacent"/>
     <disable_collisions link1="link1" link2="link2" reason="Adjacent"/>
     <disable_collisions link1="link1" link2="link3" reason="Never"/>
     <disable_collisions link1="link2" link2="link3" reason="Adjacent"/>
@@ -58,5 +59,8 @@
     <disable_collisions link1="link5" link2="link8" reason="Never"/>
     <disable_collisions link1="link6" link2="link7" reason="Never"/>
     <disable_collisions link1="link6" link2="link8" reason="Never"/>
+    <disable_collisions link1="link6" link2="wrist_depth_camera_link" reason="Never"/>
+    <disable_collisions link1="link7" link2="wrist_depth_camera_link" reason="Never"/>
     <disable_collisions link1="link7" link2="link8" reason="Default"/>
+    <disable_collisions link1="link8" link2="wrist_depth_camera_link" reason="Never"/>
 </robot>

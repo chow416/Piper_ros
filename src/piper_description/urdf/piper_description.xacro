@@ -2,6 +2,7 @@
 <robot
   name="piper"
   xmlns:xacro="http://ros.org/wiki/xacro">
+  <xacro:include filename="$(find piper_description)/urdf/wrist_depth_camera.xacro" />
 <!-- world -->
   <link name="world"/>
   <joint name="fixed_base_joint" type="fixed">
@@ -387,6 +388,7 @@
     <child
       link="gripper_base" />
   </joint>
+  <xacro:wrist_depth_camera parent_link="gripper_base" enable_gazebo="false" />
   <link
     name="link7">
     <inertial>

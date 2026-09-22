@@ -1,0 +1,16 @@
+button_target_node:
+  ros__parameters:
+    use_sim_time: true
+    checkpoint: /ws/models/button_ssdlite_v2/best.pt
+    default_target_color: red
+    score_threshold: 0.12
+    base_frame: base_link
+    stability_window: 5
+    stability_required: 3
+    stability_tolerance: 0.015
+    # This controlled demo panel faces the robot and all button centres lie here.
+    workspace_x_min: 0.20
+    workspace_x_max: 0.45
+    workspace_y_abs_max: 0.20
+    workspace_z_min: 0.08
+    workspace_z_max: 0.40

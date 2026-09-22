@@ -1,25 +1,18 @@
+# The wrist camera publishes a depth PointCloud2 in Gazebo.  MoveIt filters
+# points belonging to the robot itself and inserts the remaining points into
+# this OctoMap in base_link coordinates.
+octomap_frame: base_link
+octomap_resolution: 0.03
+
 sensors:
-  - default_sensor
-  - kinect_depthimage
-default_sensor:
-  far_clipping_plane_distance: 5.0
-  filtered_cloud_topic: filtered_cloud
-  image_topic: /head_mount_kinect/depth_registered/image_raw
-  max_update_rate: 1.0
-  near_clipping_plane_distance: 0.3
+  - wrist_depth_pointcloud
+
+wrist_depth_pointcloud:
+  sensor_plugin: occupancy_map_monitor/PointCloudOctomapUpdater
+  point_cloud_topic: /wrist_camera/depth/points
+  max_range: 2.0
+  point_subsample: 4
   padding_offset: 0.03
-  padding_scale: 4.0
-  queue_size: 5
-  sensor_plugin: occupancy_map_monitor/DepthImageOctomapUpdater
-  shadow_threshold: 0.2
-kinect_depthimage:
-  far_clipping_plane_distance: 5.0
-  filtered_cloud_topic: filtered_cloud
-  image_topic: /head_mount_kinect/depth_registered/image_raw
-  max_update_rate: 1.0
-  near_clipping_plane_distance: 0.3
-  padding_offset: 0.03
-  padding_scale: 4.0
-  queue_size: 5
-  sensor_plugin: occupancy_map_monitor/DepthImageOctomapUpdater
-  shadow_threshold: 0.2
+  padding_scale: 1.0
+  max_update_rate: 5.0
+  filtered_cloud_topic: /wrist_camera/filtered_points

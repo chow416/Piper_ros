@@ -1,8 +1,10 @@
 import os
 from launch import LaunchDescription
-from launch.actions import ExecuteProcess, RegisterEventHandler
+from launch.actions import DeclareLaunchArgument, ExecuteProcess, RegisterEventHandler
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
+from launch.conditions import IfCondition, UnlessCondition
+from launch.substitutions import LaunchConfiguration
 
 from launch.event_handlers import OnProcessExit
 
@@ -20,11 +22,36 @@ def generate_launch_description():
 
     pkg_share = FindPackageShare(package=package_name).find(package_name) 
     urdf_model_path = os.path.join(pkg_share, f'urdf/{urdf_name}')
+    gazebo_pkg_share = FindPackageShare(package='piper_gazebo').find('piper_gazebo')
+    default_world = os.path.join(gazebo_pkg_share, 'worlds', 'elevator_table.world')
 
-    # Start Gazebo server
+    gui_arg = DeclareLaunchArgument(
+        'gui',
+        default_value='true',
+        description='Start the Gazebo client in addition to the physics server.'
+    )
+    gui = LaunchConfiguration('gui')
+    world_arg = DeclareLaunchArgument(
+        'world',
+        default_value=default_world,
+        description='Gazebo world file.'
+    )
+    world = LaunchConfiguration('world')
+
+    # With GUI, `gazebo` starts both gzserver and gzclient.  For Docker and
+    # batch tests, run gzserver alone to keep simulation physics and ROS
+    # plugins while avoiding an X11/OpenGL client.
     start_gazebo_cmd =  ExecuteProcess(
-        cmd=['gazebo', '--verbose','-s', 'libgazebo_ros_init.so', '-s', 'libgazebo_ros_factory.so'],
-        output='screen')
+        cmd=['gazebo', '--verbose', '-s', 'libgazebo_ros_init.so',
+             '-s', 'libgazebo_ros_factory.so', world],
+        output='screen',
+        condition=IfCondition(gui))
+
+    start_gazebo_server_cmd = ExecuteProcess(
+        cmd=['gzserver', '--verbose', '-s', 'libgazebo_ros_init.so',
+             '-s', 'libgazebo_ros_factory.so', world],
+        output='screen',
+        condition=UnlessCondition(gui))
 
 
     # 因为 urdf文件中有一句 $(find mybot) 需要用xacro进行编译一下才行
@@ -79,12 +106,27 @@ def generate_launch_description():
             )
     )
 
+    # Controller manager services can time out when several load requests are
+    # sent concurrently on slower software-rendered simulations.  Load them in
+    # a deterministic sequence instead.
     close_evt2 = RegisterEventHandler(
             event_handler=OnProcessExit(
                 target_action=load_joint_state_controller,
-                on_exit=[load_joint_trajectory_controller, 
-                         load_gripper_trajectory_controller,
-                         load_gripper8_trajectory_controller],
+                on_exit=[load_joint_trajectory_controller],
+            )
+    )
+
+    close_evt3 = RegisterEventHandler(
+            event_handler=OnProcessExit(
+                target_action=load_joint_trajectory_controller,
+                on_exit=[load_gripper_trajectory_controller],
+            )
+    )
+
+    close_evt4 = RegisterEventHandler(
+            event_handler=OnProcessExit(
+                target_action=load_gripper_trajectory_controller,
+                on_exit=[load_gripper8_trajectory_controller],
             )
     )
 
@@ -96,10 +138,15 @@ def generate_launch_description():
 
     ld = LaunchDescription()
 
+    ld.add_action(gui_arg)
+    ld.add_action(world_arg)
     ld.add_action(close_evt1)
     ld.add_action(close_evt2)
+    ld.add_action(close_evt3)
+    ld.add_action(close_evt4)
     ld.add_action(node_gripper_mirror_controller)
     ld.add_action(start_gazebo_cmd)
+    ld.add_action(start_gazebo_server_cmd)
     ld.add_action(node_robot_state_publisher)
     ld.add_action(spawn_entity_cmd)
 

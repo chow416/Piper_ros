@@ -1,0 +1,30 @@
+button_dataset_generator:
+  ros__parameters:
+    use_sim_time: true
+    image_topic: /wrist_camera/depth/image_raw
+    camera_info_topic: /wrist_camera/depth/camera_info
+    world_frame: world
+    num_samples: 500
+    random_seed: 17
+    settle_seconds: 0.18
+    jpeg_quality: 95
+    overwrite: false
+
+    # A rigid perturbation is applied to the panel and all three buttons.
+    translation_x_min: -0.015
+    translation_x_max: 0.025
+    translation_y_abs: 0.025
+    translation_z_abs: 0.025
+    roll_abs_deg: 4.0
+    pitch_abs_deg: 5.0
+    yaw_abs_deg: 6.0
+
+    augment_images: true
+    negative_fraction: 0.10
+    brightness_abs: 24.0
+    contrast_min: 0.80
+    contrast_max: 1.20
+    saturation_min: 0.75
+    saturation_max: 1.25
+    noise_sigma_max: 4.0
+    blur_probability: 0.20
