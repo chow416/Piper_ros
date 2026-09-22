@@ -1,0 +1,69 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://ros.org/wiki/xacro">
+  <!--
+    Simplified collision/visual model of the stator-mounted pressing tool.
+
+    The physical tool is bolted to the joint-6 motor stator, not to the
+    rotating joint-6 output flange.  Therefore this macro branches directly
+    from link5 at the joint-6 stator frame.  Dimensions are deliberately kept
+    as parameters until CAD or measured values are available.
+  -->
+  <xacro:macro name="piper_press_tool"
+               params="parent_link enable_gazebo:=false tool_length:=0.1358 body_length:=0.105 body_radius:=0.045 probe_radius:=0.006">
+    <link name="press_tool_link">
+      <inertial>
+        <origin xyz="0 0 ${body_length / 2.0}" rpy="0 0 0" />
+        <mass value="0.45" />
+        <inertia ixx="0.00055" ixy="0" ixz="0"
+                 iyy="0.00055" iyz="0" izz="0.00040" />
+      </inertial>
+      <visual name="press_tool_body_visual">
+        <origin xyz="0 0 ${body_length / 2.0}" rpy="0 0 0" />
+        <geometry>
+          <cylinder radius="${body_radius}" length="${body_length}" />
+        </geometry>
+        <material name="press_tool_blue">
+          <color rgba="0.35 0.55 0.70 1" />
+        </material>
+      </visual>
+      <collision name="press_tool_body_collision">
+        <origin xyz="0 0 ${body_length / 2.0}" rpy="0 0 0" />
+        <geometry>
+          <cylinder radius="${body_radius}" length="${body_length}" />
+        </geometry>
+      </collision>
+      <visual name="press_probe_visual">
+        <origin xyz="0 0 ${(body_length + tool_length) / 2.0}" rpy="0 0 0" />
+        <geometry>
+          <cylinder radius="${probe_radius}" length="${tool_length - body_length}" />
+        </geometry>
+        <material name="press_probe_gray">
+          <color rgba="0.70 0.72 0.74 1" />
+        </material>
+      </visual>
+      <collision name="press_probe_collision">
+        <origin xyz="0 0 ${(body_length + tool_length) / 2.0}" rpy="0 0 0" />
+        <geometry>
+          <cylinder radius="${probe_radius}" length="${tool_length - body_length}" />
+        </geometry>
+      </collision>
+    </link>
+
+    <!-- This is the joint-6 stator frame expressed in link5. -->
+    <joint name="press_tool_mount_joint" type="fixed">
+      <origin xyz="8.8259E-05 -0.091 0" rpy="1.5708 0 0" />
+      <parent link="${parent_link}" />
+      <child link="press_tool_link" />
+    </joint>
+
+    <!-- Tool +Z is the pressing direction; the TCP is the rod tip. -->
+    <link name="press_tcp" />
+    <joint name="press_tcp_joint" type="fixed">
+      <origin xyz="0 0 ${tool_length}" rpy="0 0 0" />
+      <parent link="press_tool_link" />
+      <child link="press_tcp" />
+    </joint>
+
+    <xacro:wrist_depth_camera parent_link="press_tool_link" enable_gazebo="${enable_gazebo}" />
+  </xacro:macro>
+</robot>

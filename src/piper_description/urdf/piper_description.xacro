@@ -2,7 +2,9 @@
 <robot
   name="piper"
   xmlns:xacro="http://ros.org/wiki/xacro">
+  <xacro:arg name="use_press_tool" default="false" />
   <xacro:include filename="$(find piper_description)/urdf/wrist_depth_camera.xacro" />
+  <xacro:include filename="$(find piper_description)/urdf/piper_press_tool.xacro" />
 <!-- world -->
   <link name="world"/>
   <joint name="fixed_base_joint" type="fixed">
@@ -319,24 +321,25 @@
       </geometry>
     </collision>
   </link>
-  <joint
-    name="joint6"
-    type="revolute">
-    <origin
-      xyz="8.8259E-05 -0.091 0"
-      rpy="1.5708 0 0" />
-    <parent
-      link="link5" />
-    <child
-      link="link6" />
-    <axis
-      xyz="0 0 1" />
-    <limit
-      lower="-2.0944"
-      upper="2.0944"
-      effort="100"
-      velocity="3" />
-  </joint>
+  <xacro:unless value="$(arg use_press_tool)">
+    <joint name="joint6" type="revolute">
+      <origin xyz="8.8259E-05 -0.091 0" rpy="1.5708 0 0" />
+      <parent link="link5" />
+      <child link="link6" />
+      <axis xyz="0 0 1" />
+      <limit lower="-2.0944" upper="2.0944" effort="100" velocity="3" />
+    </joint>
+  </xacro:unless>
+  <xacro:if value="$(arg use_press_tool)">
+    <!-- The unused rotor is retained at its zero pose for collision geometry. -->
+    <joint name="joint6_fixed" type="fixed">
+      <origin xyz="8.8259E-05 -0.091 0" rpy="1.5708 0 0" />
+      <parent link="link5" />
+      <child link="link6" />
+    </joint>
+    <xacro:piper_press_tool parent_link="link5" enable_gazebo="false" />
+  </xacro:if>
+  <xacro:unless value="$(arg use_press_tool)">
   <link
     name="gripper_base">
     <inertial>
@@ -505,6 +508,7 @@
       effort="10"
       velocity="1" />
   </joint>
+  </xacro:unless>
 
 <!-- controller -->
   <xacro:macro name="transmission_block" params="tran_name joint_name motor_name">
@@ -525,9 +529,11 @@
   <xacro:transmission_block tran_name="tran3" joint_name="joint3" motor_name="motor3"/>
   <xacro:transmission_block tran_name="tran4" joint_name="joint4" motor_name="motor4"/>
   <xacro:transmission_block tran_name="tran5" joint_name="joint5" motor_name="motor5"/>
-  <xacro:transmission_block tran_name="tran6" joint_name="joint6" motor_name="motor6"/>
-  <xacro:transmission_block tran_name="tran7" joint_name="joint7" motor_name="motor7"/>
-  <xacro:transmission_block tran_name="tran8" joint_name="joint8" motor_name="motor8"/>
+  <xacro:unless value="$(arg use_press_tool)">
+    <xacro:transmission_block tran_name="tran6" joint_name="joint6" motor_name="motor6"/>
+    <xacro:transmission_block tran_name="tran7" joint_name="joint7" motor_name="motor7"/>
+    <xacro:transmission_block tran_name="tran8" joint_name="joint8" motor_name="motor8"/>
+  </xacro:unless>
 <!-- gazebo -->
   <gazebo>
     <plugin name="gazebo_ros2_control" filename="libgazebo_ros2_control.so">
