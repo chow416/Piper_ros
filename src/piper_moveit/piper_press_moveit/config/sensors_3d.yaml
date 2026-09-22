@@ -1,0 +1,15 @@
+octomap_frame: base_link
+octomap_resolution: 0.03
+
+sensors:
+  - wrist_depth_pointcloud
+
+wrist_depth_pointcloud:
+  sensor_plugin: occupancy_map_monitor/PointCloudOctomapUpdater
+  point_cloud_topic: /wrist_camera/depth/points
+  max_range: 2.0
+  point_subsample: 4
+  padding_offset: 0.03
+  padding_scale: 1.0
+  max_update_rate: 5.0
+  filtered_cloud_topic: /wrist_camera/filtered_points

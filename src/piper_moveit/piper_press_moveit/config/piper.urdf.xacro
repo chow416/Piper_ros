@@ -1,0 +1,12 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="piper">
+  <xacro:arg name="initial_positions_file" default="initial_positions.yaml" />
+  <xacro:arg name="use_press_tool" default="true" />
+
+  <xacro:include filename="$(find piper_description)/urdf/piper_description.xacro" />
+  <xacro:include filename="piper.ros2_control.xacro" />
+
+  <xacro:piper_press_ros2_control
+    name="FakeSystem"
+    initial_positions_file="$(arg initial_positions_file)" />
+</robot>
