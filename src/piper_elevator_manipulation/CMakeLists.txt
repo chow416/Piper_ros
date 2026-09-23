@@ -12,9 +12,14 @@ find_package(moveit_ros_planning REQUIRED)
 find_package(moveit_task_constructor_core REQUIRED)
 find_package(moveit_task_constructor_msgs REQUIRED)
 find_package(rclcpp REQUIRED)
+find_package(sensor_msgs REQUIRED)
 find_package(tf2_eigen REQUIRED)
 
-add_executable(press_button_demo src/press_button_demo.cpp)
+add_executable(press_button_demo
+  src/five_dof_ik.cpp
+  src/press_button_demo.cpp
+)
+target_include_directories(press_button_demo PRIVATE include)
 ament_target_dependencies(press_button_demo
   geometry_msgs
   moveit_core
@@ -22,6 +27,7 @@ ament_target_dependencies(press_button_demo
   moveit_task_constructor_core
   moveit_task_constructor_msgs
   rclcpp
+  sensor_msgs
   tf2_eigen
 )
 

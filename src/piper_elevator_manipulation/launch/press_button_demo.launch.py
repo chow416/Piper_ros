@@ -14,21 +14,25 @@ def generate_launch_description():
     button_x = LaunchConfiguration("button_x")
     button_y = LaunchConfiguration("button_y")
     button_z = LaunchConfiguration("button_z")
-    press_distance = LaunchConfiguration("press_distance")
-    tool_length = LaunchConfiguration("tool_length")
+    press_direction_x = LaunchConfiguration("press_direction_x")
+    press_direction_y = LaunchConfiguration("press_direction_y")
+    press_direction_z = LaunchConfiguration("press_direction_z")
+    approach_distance = LaunchConfiguration("approach_distance")
+    press_depth = LaunchConfiguration("press_depth")
     start_scene = LaunchConfiguration("start_scene")
+    rviz = LaunchConfiguration("rviz")
 
     gazebo_launch = os.path.join(
         get_package_share_directory("piper_gazebo"),
-        "launch", "piper_with_gripper", "piper_gazebo.launch.py",
+        "launch", "piper_press", "piper_press_gazebo.launch.py",
     )
     moveit_launch = os.path.join(
-        get_package_share_directory("piper_with_gripper_moveit"),
-        "launch", "piper_moveit.launch.py",
+        get_package_share_directory("piper_press_moveit"),
+        "launch", "piper_press_moveit.launch.py",
     )
     moveit_config = MoveItConfigsBuilder(
-        "piper", package_name="piper_with_gripper_moveit"
-    ).to_moveit_configs()
+        "piper", package_name="piper_press_moveit"
+    ).robot_description(mappings={"use_press_tool": "true"}).to_moveit_configs()
 
     demo_node = Node(
         package="piper_elevator_manipulation",
@@ -41,8 +45,11 @@ def generate_launch_description():
              "button_x": button_x,
              "button_y": button_y,
              "button_z": button_z,
-             "press_distance": press_distance,
-             "tool_length": tool_length},
+             "press_direction_x": press_direction_x,
+             "press_direction_y": press_direction_y,
+             "press_direction_z": press_direction_z,
+             "approach_distance": approach_distance,
+             "press_depth": press_depth},
         ],
     )
 
@@ -52,19 +59,25 @@ def generate_launch_description():
         DeclareLaunchArgument("button_x", default_value="0.300"),
         DeclareLaunchArgument("button_y", default_value="0.000"),
         DeclareLaunchArgument("button_z", default_value="0.240"),
-        DeclareLaunchArgument("press_distance", default_value="0.040",
-                              description="Pre-press standoff and Cartesian travel to the button surface."),
-        DeclareLaunchArgument("tool_length", default_value="0.1358",
-                              description="link6 to gripper contact point along local +Z."),
+        DeclareLaunchArgument("press_direction_x", default_value="1.0"),
+        DeclareLaunchArgument("press_direction_y", default_value="0.0"),
+        DeclareLaunchArgument("press_direction_z", default_value="0.0"),
+        DeclareLaunchArgument("approach_distance", default_value="0.030",
+                              description="Clearance from the surface to the aligned pre-press waypoint."),
+        DeclareLaunchArgument("press_depth", default_value="0.004",
+                              description="Travel beyond the contact point during the press."),
         DeclareLaunchArgument("start_scene", default_value="true",
                               description="Start Gazebo and MoveIt, or use an already running scene."),
+        DeclareLaunchArgument("rviz", default_value="true",
+                              description="Start RViz with the five-axis MoveIt scene."),
         IncludeLaunchDescription(PythonLaunchDescriptionSource(gazebo_launch),
                                  launch_arguments={"gui": "false"}.items(),
                                  condition=IfCondition(start_scene)),
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(moveit_launch),
             launch_arguments={
-                "capabilities": "move_group/ExecuteTaskSolutionCapability"
+                "capabilities": "move_group/ExecuteTaskSolutionCapability",
+                "rviz": rviz,
             }.items(),
             condition=IfCondition(start_scene),
         ),

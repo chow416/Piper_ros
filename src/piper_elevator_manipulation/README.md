@@ -1,18 +1,21 @@
 # Piper elevator manipulation demo
 
-`press_button_demo` is a deliberately small MoveIt Task Constructor (MTC)
-baseline for the planning/control layer.  It plans the following sequence from
+`press_button_demo` is the first five-axis MoveIt Task Constructor (MTC)
+baseline for the planning/control layer. It plans the following sequence from
 the live Gazebo joint state:
 
-1. plan to a parameterized pre-press pose;
-2. move `press_distance` metres along `+X` in `base_link`;
-3. retreat by the same distance along `-X`.
+1. capture `joint1` through `joint5` as the return state;
+2. solve a five-dimensional pre-press target and plan a collision-free approach;
+3. advance to contact and move through the configured press depth;
+4. retreat to the pre-press waypoint;
+5. restore normal collision checking and return to the captured start state.
 
-The target is supplied explicitly in the planning frame through launch
-parameters.  This package deliberately has no dependency on the paused
-perception prototype.  A later task interface will accept a world-frame point
-and press direction without coupling the planning layer to any particular
-target producer.
+The target is supplied explicitly in `world` through launch parameters. Its
+task contract is a point plus a press direction, not an arbitrary 6D pose:
+rotation around the cylindrical press rod is intentionally free because J6 is
+not actuated. `FiveDofIkSolver` numerically minimizes TCP position error and
+press-axis direction error, then MTC performs collision checking and trajectory
+planning. The package has no dependency on the paused perception prototype.
 
 Run a dry plan first:
 
@@ -26,9 +29,16 @@ Then execute the trajectory in Gazebo:
 ros2 launch piper_elevator_manipulation press_button_demo.launch.py execute:=true
 ```
 
-The launch starts Gazebo without its own GUI and starts MoveIt RViz.  It also
-loads MTC's `ExecuteTaskSolutionCapability`, which forwards the planned
-trajectory to the existing `arm_controller`.
+The default target is the centre red button at `(0.300, 0.000, 0.240)` with
+press direction `(+1, 0, 0)`, a 30 mm pre-press clearance, and 4 mm press
+depth. Override `button_x`, `button_y`, `button_z`, `press_direction_x`,
+`press_direction_y`, `press_direction_z`, `approach_distance`, or
+`press_depth` as needed. The launch starts the five-axis Gazebo model, the
+`piper_press_moveit` configuration, RViz, and MTC's execution capability.
+
+The custom IK tolerances, numerical restart count, speed limits, and provisional
+tool dimensions remain development parameters. They must be calibrated and
+validated before commanding hardware.
 
 ## Simulated wrist RGB-D camera
 

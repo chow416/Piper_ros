@@ -13,10 +13,11 @@
   <depend>moveit_task_constructor_core</depend>
   <depend>moveit_task_constructor_msgs</depend>
   <depend>rclcpp</depend>
+  <depend>sensor_msgs</depend>
   <depend>tf2_eigen</depend>
 
   <exec_depend>piper_gazebo</exec_depend>
-  <exec_depend>piper_with_gripper_moveit</exec_depend>
+  <exec_depend>piper_press_moveit</exec_depend>
   <exec_depend>moveit_configs_utils</exec_depend>
 
   <export>
