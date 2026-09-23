@@ -29,9 +29,10 @@ Then execute the trajectory in Gazebo:
 ros2 launch piper_elevator_manipulation press_button_demo.launch.py execute:=true
 ```
 
-The default target is the centre red button at `(0.300, 0.000, 0.240)` with
-press direction `(+1, 0, 0)`, a 30 mm pre-press clearance, and 4 mm press
-depth. Override `button_x`, `button_y`, `button_z`, `press_direction_x`,
+The default target is the virtual world-frame point `(0.300, 0.000, 0.240)`
+with press direction `(+1, 0, 0)`, a 30 mm pre-press clearance, and 4 mm
+press depth. No physical panel or button is present in the default simulation
+world. Override `button_x`, `button_y`, `button_z`, `press_direction_x`,
 `press_direction_y`, `press_direction_z`, `approach_distance`, or
 `press_depth` as needed. The launch starts the five-axis Gazebo model, the
 `piper_press_moveit` configuration, RViz, and MTC's execution capability.
@@ -63,13 +64,12 @@ ros2 topic hz /wrist_camera/depth/points
 ros2 run tf2_ros tf2_echo base_link wrist_depth_camera_optical_frame
 ```
 
-## Elevator table scene
+## Tabletop simulation scene
 
-The default Gazebo world contains a work table, the Piper arm, and a vertical
-elevator panel with three physical button discs.  From top to bottom they are
-blue, red, and green.  Each is a separately named Gazebo model so its pose can
-serve as synthetic-data ground truth.  The front face of the red middle button
-is aligned with the demo target at `(0.300, 0.000, 0.240)` in `base_link`.
+The default Gazebo world contains the work table and Piper arm, but deliberately
+contains no panel or physical button. The task consumes only the supplied
+world-frame target point and press direction. This keeps planning/control tests
+independent of the paused perception prototype.
 
 Run the scene with headless Gazebo and RViz:
 
