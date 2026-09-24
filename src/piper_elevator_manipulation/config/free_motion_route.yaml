@@ -1,0 +1,41 @@
+# Joint angles are in radians. These are example staging poses for the
+# tabletop simulation and must be recalibrated if the robot geometry changes.
+# Each segment is checked against the live MoveIt planning scene at runtime.
+piper_press_button_demo:
+  ros__parameters:
+    cartesian:
+      max_step_m: 0.002
+      max_lateral_error_m: 0.003
+      max_joint_jump_rad: 0.20
+      # Scalings multiply the hardware limits in
+      # piper_press_moveit/config/joint_limits.yaml (3.0 rad/s, 5.0 rad/s^2),
+      # so 0.10 means 0.30 rad/s and 0.50 rad/s^2.
+      approach_speed_scaling: 0.10
+      # The press is the one phase that touches something, and there is no
+      # force sensor, so it stays deliberately slow. Not the bottleneck
+      # anyway: 3 mm at this scaling is still under a second.
+      press_speed_scaling: 0.02
+      retreat_speed_scaling: 0.08
+    press_timeout_s: 15.0
+    free_motion:
+      route_name: tabletop_staging
+      waypoint_names: [clearance]
+      max_joint_step_rad: 0.025
+      # Corrects only the start-state joint-limit noise that the hardware
+      # reports. Measured on the real arm with the motors enabled: joint3 rests
+      # at about 0.0025 rad past its zero-side limit because the firmware soft
+      # limit and the mechanical stop do not coincide. The simulator only ever
+      # showed a few 1e-5 rad, so the tolerance is set from the hardware figure
+      # with roughly a factor of two of margin. The validator rejects anything
+      # above 0.005 rad, so this cannot be widened into hiding a real fault.
+      start_bound_tolerance_rad: 0.005
+      # Also used by the OMPL fallback and the return-to-start stage, so this is
+      # the single knob for how fast untethered free motion runs.
+      velocity_scaling: 0.20
+      acceleration_scaling: 0.20
+      clearance:
+        joint1: 0.0
+        joint2: 0.15
+        joint3: -0.15
+        joint4: 0.0
+        joint5: 0.0

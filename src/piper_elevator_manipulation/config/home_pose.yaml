@@ -1,0 +1,58 @@
+# Post-enable home pose for the Piper press task.
+#
+# ---------------------------------------------------------------------------
+# Why this file exists
+# ---------------------------------------------------------------------------
+# Enabling the motors does NOT drive the arm to the zero pose. It energises the
+# motors and holds whatever pose the arm is already in. A parked, limp arm rests
+# against its mechanical stops, and for joint2 and joint3 those stops lie
+# *outside* the firmware limits (joint2 is limited to >= 0, joint3 to <= 0).
+# Once the firmware takes over it pulls those joints back to the limits, so the
+# arm ends up with two joints pinned against their stops.
+#
+# That is a bad pose to plan from. A five-axis arm asked for a TCP position plus
+# a press-axis direction has a family of solutions, and pinning two joints
+# removes two degrees of freedom, so nearby targets become unreachable. Measured
+# on the real arm, the five-dimensional IK was 4 mm to 11 mm short of the target
+# from such a pose, and succeeded as soon as the joints were moved off the stops.
+#
+# Run `go_home` once after enabling the motors so every task starts from a pose
+# that is deliberately well away from the stops.
+#
+# ---------------------------------------------------------------------------
+# Joint limits and recommended home ranges
+# ---------------------------------------------------------------------------
+# "limits" come from the arm protocol. "recommended home" keeps a 0.2618 rad
+# (15 deg) margin from every stop, which is what this file should stay inside.
+# Values in this file are radians, matching the rest of this package.
+#
+#  joint    limits (rad)          limits (deg)      recommended home (rad)  recommended home (deg)
+#  joint1   [-2.6179, +2.6179]   [-150.0, +150.0]   [-2.3562, +2.3562]      [-135.0, +135.0]
+#  joint2   [ 0.0000, +3.1400]   [   0.0, +180.0]   [ 0.2618, +2.8782]      [  15.0, +165.0]
+#  joint3   [-2.9670,  0.0000]   [-170.0,    0.0]   [-2.7052, -0.2618]      [-155.0,  -15.0]
+#  joint4   [-1.7450, +1.7450]   [-100.0, +100.0]   [-1.4832, +1.4832]      [ -85.0,  +85.0]
+#  joint5   [-1.2200, +1.2200]   [ -70.0,  +70.0]   [-0.9582, +0.9582]      [ -55.0,  +55.0]
+#
+# joint2 and joint3 are the ones that matter. Their zero sits at the end of the
+# range, so a home pose at 0 rad puts them straight back onto the stops. Keep
+# both at least 0.2618 rad (15 deg) away from zero.
+#
+# joint6 is not part of the five-axis press configuration. The driver holds it at
+# its measured angle, so there is no home entry for it.
+#
+# The recommended ranges are advisory: `go_home` refuses values outside the
+# protocol limits and warns when a value falls outside the recommended range.
+#
+# ---------------------------------------------------------------------------
+# Relationship to the free-motion route
+# ---------------------------------------------------------------------------
+# config/free_motion_route.yaml drives the task's free-motion segment. Its first
+# waypoint should sit close to this home pose so that segment is a short, well
+# conditioned hop rather than a detour.
+
+home_pose:
+  joint1: 0.0     # recommended home range [-2.3562, +2.3562] rad = [-135.0, +135.0] deg
+  joint2: 0.35    # recommended home range [ 0.2618, +2.8782] rad = [  15.0, +165.0] deg
+  joint3: -0.35   # recommended home range [-2.7052, -0.2618] rad = [-155.0,  -15.0] deg
+  joint4: 0.0     # recommended home range [-1.4832, +1.4832] rad = [ -85.0,  +85.0] deg
+  joint5: 0.0     # recommended home range [-0.9582, +0.9582] rad = [ -55.0,  +55.0] deg
