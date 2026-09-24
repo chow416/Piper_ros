@@ -197,21 +197,33 @@ frame 转到 planning frame，同时校验 TF 的时间戳新鲜度（TF 比目�
 不能只杀 `ros2 launch` 的 PID —— 子进程不一定跟着退。
 **新流程**：每次实验结束、以及每次开跑前，都跑 `preflight_check.py`。
 
-### [ ] 10. 版本控制收尾
+### [x] 10. 版本控制收尾（本地已完成 2026-09-24）
 
-**现状证据**（`git status --short`）：
+**2026-09-24 已完成本地提交**，在 `piper-press-dev` 分支上分五个主题提交：
+`piper_hardware` 新包 / `piper_press_hardware` 新包 / 工具长度与关节限值标定 /
+`move_group` 重复实例防护 / `piper_elevator_manipulation` 按压任务与接口。
+合计 66 个文件、8532 行新增，`git status` 干净。
 
-- 已跟踪但**有未提交修改**：`press_button_demo.cpp`、`CMakeLists.txt`、`README.md`、
-  两个 launch 文件、`package.xml`
-- **完全未跟踪**：整个 `config/`、`docs/`、`scripts/`，以及 `target_source.*`、
-  `cartesian_line_planner.*`、`free_motion_route.*`、`trajectory_executor.*` 等多个
-  头文件和源文件
+**⚠️ 仍然存在的风险：没有远程备份。**
 
-也就是说**这几天的工作基本都没进版本库**。
+`origin` 指向 `https://github.com/agilexrobotics/Piper_ros.git` —— 那是 **AgileX 的官方仓库，
+不是我们自己的**，所以**不能也不该 push 到那里**。也就是说这份工作目前**只存在于这一台机器上**，
+硬盘坏了就没了。
 
-**做法**：按主题分几个 commit（硬件接口 / 目标话题接口 / 归位动作 / 文档），不要一次性糊成一个。
+**做法**：在 GitHub / GitLab / 内网 Git 上建一个**私有**仓库，然后：
 
-**验收**：`git status` 干净；新机器 clone 下来能直接 `colcon build`。
+```bash
+cd /home/zlf/piper_ws/src/Piper_ros
+git remote rename origin upstream        # 官方仓库改名为 upstream，保留只读参考
+git remote add origin <你们自己的仓库地址>
+git push -u origin humble piper-press-dev
+```
+
+**验收**：`git push` 成功，且在另一台机器上 `git clone` 能拿到今天的提交。
+
+**另一件相关的事**：`/home/zlf/piper_ws/src/third_party/`（`moveit_task_constructor`、
+`piper_sdk`）**在这个 git 仓库之外**，也不在任何版本控制里。新机器只 clone 这个仓库是**编译不起来的**。
+需要单独决定怎么管（submodule、脚本拉取、还是也放进仓库）。
 
 ### [ ] 11. 单元测试接线
 
