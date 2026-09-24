@@ -1,0 +1,12 @@
+<library path="piper_hardware">
+  <class
+    name="piper_hardware/PiperSystem"
+    type="piper_hardware::PiperSystem"
+    base_class_type="hardware_interface::SystemInterface">
+    <description>
+      ros2_control system interface for a physical Piper arm on SocketCAN.
+      Reads joint angles from the 0x2A5/0x2A6/0x2A7 feedback frames and writes
+      position commands through the 0x155/0x156/0x157 command frames.
+    </description>
+  </class>
+</library>

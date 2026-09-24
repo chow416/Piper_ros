@@ -1,0 +1,62 @@
+<?xml version="1.0"?>
+<!--
+  Robot description for a physical Piper arm driven by piper_hardware.
+
+  Unlike the Gazebo description this file has no simulation plugin. The only
+  ros2_control entry point is piper_hardware/PiperSystem, which talks to the arm
+  over SocketCAN. Joint angles come from the arm itself, so there are no
+  synthetic initial positions to keep in sync.
+
+  Only joint1..joint5 are declared, matching the five-axis press configuration
+  where joint6 is replaced by the rigid press tool. The driver still holds
+  joint6 at its measured angle.
+-->
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="piper">
+  <xacro:arg name="use_press_tool" default="true" />
+  <xacro:arg name="can_interface" default="can0" />
+  <xacro:arg name="enable_motors_on_activate" default="false" />
+  <xacro:arg name="disable_motors_on_deactivate" default="true" />
+  <xacro:arg name="feedback_timeout" default="0.5" />
+  <xacro:arg name="command_speed_ratio" default="100" />
+  <xacro:arg name="clamp_to_protocol_limits" default="true" />
+
+  <xacro:include filename="$(find piper_description)/urdf/piper_description.xacro" />
+
+  <ros2_control name="PiperSystem" type="system">
+    <hardware>
+      <plugin>piper_hardware/PiperSystem</plugin>
+      <param name="can_interface">$(arg can_interface)</param>
+      <param name="enable_motors_on_activate">$(arg enable_motors_on_activate)</param>
+      <param name="disable_motors_on_deactivate">$(arg disable_motors_on_deactivate)</param>
+      <param name="feedback_timeout">$(arg feedback_timeout)</param>
+      <param name="command_speed_ratio">$(arg command_speed_ratio)</param>
+      <param name="clamp_to_protocol_limits">$(arg clamp_to_protocol_limits)</param>
+    </hardware>
+
+    <joint name="joint1">
+      <command_interface name="position" />
+      <state_interface name="position" />
+      <state_interface name="velocity" />
+    </joint>
+    <joint name="joint2">
+      <command_interface name="position" />
+      <state_interface name="position" />
+      <state_interface name="velocity" />
+    </joint>
+    <joint name="joint3">
+      <command_interface name="position" />
+      <state_interface name="position" />
+      <state_interface name="velocity" />
+    </joint>
+    <joint name="joint4">
+      <command_interface name="position" />
+      <state_interface name="position" />
+      <state_interface name="velocity" />
+    </joint>
+    <joint name="joint5">
+      <command_interface name="position" />
+      <state_interface name="position" />
+      <state_interface name="velocity" />
+    </joint>
+  </ros2_control>
+</robot>
