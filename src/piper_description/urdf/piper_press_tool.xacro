@@ -7,9 +7,25 @@
     rotating joint-6 output flange.  Therefore this macro branches directly
     from link5 at the joint-6 stator frame.  Dimensions are deliberately kept
     as parameters until CAD or measured values are available.
+
+    !! tool_length WAS MEASURED on 2026-09-24 !! and it is the single number the
+    whole press task is most sensitive to.
+
+    Measured 154.1 mm from the joint-6 stator mounting face to the tip of the
+    press rod. The previous value, 135.8 mm, was a placeholder, so the model put
+    the tip 18.3 mm short of where it really is. press_tcp sits at
+    0 0 ${tool_length} from press_tool_link and the 5D IK aligns the tool's +Z
+    axis with the press direction, so that error was pure overshoot along the
+    press axis: commanding the modelled tip onto a surface drove the real rod
+    18.3 mm through it. Nothing in the software could see this, because the TCP
+    position is computed by forward kinematics on this same model.
+
+    Re-measure with a caliper if the tool is ever changed or re-shimmed. Every
+    consumer (ros2_control, MoveIt, Gazebo) reads this one default, so there is
+    only one number to change.
   -->
   <xacro:macro name="piper_press_tool"
-               params="parent_link enable_gazebo:=false tool_length:=0.1358 body_length:=0.105 body_radius:=0.045 probe_radius:=0.006">
+               params="parent_link enable_gazebo:=false tool_length:=0.1541 body_length:=0.105 body_radius:=0.045 probe_radius:=0.006">
     <link name="press_tool_link">
       <inertial>
         <origin xyz="0 0 ${body_length / 2.0}" rpy="0 0 0" />

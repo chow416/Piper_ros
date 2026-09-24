@@ -1,29 +1,50 @@
+# Joint limits used by MoveIt for trajectory time parameterization.
+#
+# These are HARDWARE limits, taken from the vendor SDK, not preferences. How
+# fast a motion actually runs is decided by the scaling factors on each planner
+# and stage, so the numbers here should be the arm's capability and nothing
+# else.
+#
+# Vendor values (piper_sdk, arm_joint_config.py and MotorMaxSpdSet):
+#   joint speed        unit 0.001 rad/s,   range [0, 3000] ->  3.0 rad/s
+#   joint acceleration unit 0.01  rad/s^2, range [0, 500]  ->  5.0 rad/s^2
+#
+# Both were wrong before. max_velocity was 5.0 rad/s, above what the arm can
+# do, and max_acceleration was 1.0 rad/s^2, a fifth of it. The low acceleration
+# was why every motion looked slow and jerky: combined with the scaling factors
+# in free_motion_route.yaml the effective acceleration was 0.05 rad/s^2, a
+# hundredth of the hardware limit, so trajectories never reached their cruise
+# speed and were dominated by ramping.
+#
+# If a motion feels too fast or too aggressive, lower the scaling factor for
+# that stage, not these numbers.
+
 default_velocity_scaling_factor: 0.1
 default_acceleration_scaling_factor: 0.1
 
 joint_limits:
   joint1:
     has_velocity_limits: true
-    max_velocity: 5.0
+    max_velocity: 3.0
     has_acceleration_limits: true
-    max_acceleration: 1.0
+    max_acceleration: 5.0
   joint2:
     has_velocity_limits: true
-    max_velocity: 5.0
+    max_velocity: 3.0
     has_acceleration_limits: true
-    max_acceleration: 1.0
+    max_acceleration: 5.0
   joint3:
     has_velocity_limits: true
-    max_velocity: 5.0
+    max_velocity: 3.0
     has_acceleration_limits: true
-    max_acceleration: 1.0
+    max_acceleration: 5.0
   joint4:
     has_velocity_limits: true
-    max_velocity: 5.0
+    max_velocity: 3.0
     has_acceleration_limits: true
-    max_acceleration: 1.0
+    max_acceleration: 5.0
   joint5:
     has_velocity_limits: true
-    max_velocity: 5.0
+    max_velocity: 3.0
     has_acceleration_limits: true
-    max_acceleration: 1.0
+    max_acceleration: 5.0
