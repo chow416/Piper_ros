@@ -15,6 +15,31 @@
 
 四个终端。容器内执行（宿主侧加 `sg docker -c 'docker exec -it piper_dev bash -lc "..."'`）。
 
+### 前置（宿主执行）—— 拉起 CAN 接口
+
+**每次重新插拔 USB、或重启电脑之后都必须做。**
+
+```bash
+sudo ip link set can0 up type can bitrate 1000000
+```
+
+确认：
+
+```bash
+ip -details link show can0
+```
+
+要看到 `state UP` 和 `can state ERROR-ACTIVE` 两项。如果看到 `state DOWN` / `can state STOPPED`，说明没起来。
+
+> **为什么这一步不能省**：USB-CAN 适配器每次插拔或重启都会回到 DOWN，
+> 而且**位速率必须重新设置**（PiPER 用 1 Mbps）。
+> 接口没起来时，终端 1 的 bringup 会**阻塞等待反馈**，永远打不出
+> `Arm feedback received` —— 表现为「机械臂完全不动」，而其他终端看起来都正常。
+>
+> 2026-09-28 实际踩过：自检报了 `CLEAN`（那时脚本只检查接口**存在**、不检查是否 **UP**），
+> 但 `can0` 是 DOWN、`rx_packets = 0`。`preflight_check.py` 现在会拦住这种情况
+> 并直接打印上面那条命令。
+
 ### 终端 0 —— 上机前自检（每次开跑前都做）
 
 ```bash

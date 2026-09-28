@@ -102,11 +102,27 @@ def count_joint_state_publishers():
     return None
 
 
+# IFF_UP: the administrative "interface enabled" bit. `ip link set can0 up`
+# sets it; every replug and reboot clears it.
+IFF_UP = 0x1
+
+
 def can_interface_state(name):
+    """Return "up", "down", or None when the interface does not exist.
+
+    `operstate` is deliberately not used. A CAN interface has no carrier to
+    detect, so its operstate is not a dependable signal, and the values do not
+    line up with what actually matters: docker0 reads `down` while being
+    administratively up, and a running CAN interface reports `unknown`.
+
+    The IFF_UP bit is exactly what `ip link set can0 up` toggles, and it is the
+    one fact that decides whether the arm can be reached at all.
+    """
     try:
-        return Path(f"/sys/class/net/{name}/operstate").read_text().strip()
-    except OSError:
+        flags = int(Path(f"/sys/class/net/{name}/flags").read_text().strip(), 16)
+    except (OSError, ValueError):
         return None
+    return "up" if flags & IFF_UP else "down"
 
 
 def main():
@@ -140,8 +156,17 @@ def main():
     if state is None:
         print(f"  {arguments.can}: not present")
         problems.append(f"{arguments.can} does not exist; check the USB-CAN adapter")
+    elif state == "down":
+        print(f"  {arguments.can}: DOWN  <-- the arm cannot be reached")
+        problems.append(
+            f"{arguments.can} is DOWN. Bring it up first -- a USB-CAN adapter\n"
+            "    comes back down after every replug and reboot, and the bitrate\n"
+            "    has to be set again:\n"
+            f"      sudo ip link set {arguments.can} up type can bitrate 1000000\n"
+            "    Without this the bringup blocks waiting for feedback and never\n"
+            "    prints `Arm feedback received`.")
     else:
-        print(f"  {arguments.can}: {state}")
+        print(f"  {arguments.can}: up")
 
     if not arguments.skip_topic_check:
         print()
