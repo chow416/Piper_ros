@@ -27,7 +27,8 @@ task contract is a point plus a press direction, not an arbitrary 6D pose:
 rotation around the cylindrical press rod is intentionally free because J6 is
 not actuated. `FiveDofIkSolver` numerically minimizes TCP position error and
 press-axis direction error, then MTC performs collision checking and trajectory
-planning. The package has no dependency on the paused perception prototype.
+planning. The package has no dependency on the perception layer; it only sees
+the topic contract described above.
 
 Run a dry plan first:
 
@@ -195,7 +196,7 @@ ros2 run tf2_ros tf2_echo base_link wrist_depth_camera_optical_frame
 The default Gazebo world contains the work table and Piper arm, but deliberately
 contains no panel or physical button. The task consumes only the supplied
 world-frame target point and press direction. This keeps planning/control tests
-independent of the paused perception prototype.
+independent of the perception layer.
 
 Run the scene with headless Gazebo and RViz:
 
@@ -209,6 +210,8 @@ Show Gazebo's own GUI as well (more CPU/GPU intensive):
 ros2 launch piper_elevator_manipulation elevator_scene.launch.py gazebo_gui:=true
 ```
 
-The earlier perception study is retained for reference in
-[`docs/button_perception_plan.md`](docs/button_perception_plan.md), but it is
-paused and is not part of the current planning/control baseline.
+Perception is not part of the current planning/control baseline. The earlier
+neural-network study (`piper_button_perception`) was removed on 2026-09-28. The
+next perception effort targets a **calibration board** and publishes its result
+through the same `/press/target_pose` contract, so this package is unaffected by
+the change.

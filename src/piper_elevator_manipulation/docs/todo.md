@@ -283,12 +283,22 @@ launch 文件里的 `DeclareLaunchArgument`（目标与闸门）、`config/home_
 
 **验收**：能在不动机器臂的情况下看到三个关键位姿和接近方向。
 
-### [ ] 16. 封存感知原型
+### [x] 16. 封存感知原型（已完成 2026-09-28）
 
-**现状证据**：`piper_button_perception` 已决定暂停研发，但既没提交进版本库，
-也没加 `COLCON_IGNORE`，每次 `colcon build` 仍在编译它。
+**做法**：整体移除，不是归档。
 
-**验收**：明确它的状态（归档 / COLCON_IGNORE / 移出工作区），并让构建时间下降。
+- 删除 `piper_button_perception` 包（19 个文件）及其 `build` / `install` 残留。
+- 删除训练与感知容器配置：`docker/Dockerfile.training`、
+  `docker/docker-compose.training.yml`、`docker/docker-compose.perception.yml`、
+  `docker/requirements-training.txt`。
+- 删除归档设计文档 `docs/button_perception_plan.md`。
+- 数据集与训练权重共 68 MB 移到工作区外
+  `~/piper_perception_archive_20260928/` 备份，**未进版本库**；这两个目录原本
+  就在 `.gitignore` 里，删掉不可用 git 恢复。
+
+**结果**：`colcon build` 不再编译该包。后续感知改为识别标定板，不再依赖
+神经网络；标定结果写回 `wrist_depth_camera.xacro` 的 fixed joint origin，
+使 TF 成为唯一真相，感知层与规划层都不需要知道标定细节。
 
 ### [ ] 17. 消除限位表与反馈解析的重复
 
