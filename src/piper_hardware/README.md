@@ -10,7 +10,7 @@ hardware plugin changing.
 
 | Direction | CAN ID | Content |
 |---|---|---|
-| read | `0x2A5` | joint1, joint2 (int32 little-endian, 0.001°) |
+| read | `0x2A5` | joint1, joint2 (signed int32 big-endian, 0.001°) |
 | read | `0x2A6` | joint3, joint4 |
 | read | `0x2A7` | joint5, joint6 |
 | read | `0x2A1`, `0x2A8` | liveness only (status, gripper) |

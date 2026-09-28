@@ -204,6 +204,9 @@ frame 转到 planning frame，同时校验 TF 的时间戳新鲜度（TF 比目�
 `move_group` 重复实例防护 / `piper_elevator_manipulation` 按压任务与接口。
 合计 66 个文件、8532 行新增，`git status` 干净。
 
+其中 `piper_press_hardware` 是当时的调试包，现已从工作区移除；
+此处仅保留原提交记录。
+
 **⚠️ 仍然存在的风险：没有远程备份。**
 
 `origin` 指向 `https://github.com/agilexrobotics/Piper_ros.git` —— 那是 **AgileX 的官方仓库，
@@ -289,9 +292,9 @@ launch 文件里的 `DeclareLaunchArgument`（目标与闸门）、`config/home_
 
 ### [ ] 17. 消除限位表与反馈解析的重复
 
-**现状证据**：`piper_press_hardware`(Python) 有 `model_limits.py`、`feedback.py`，
-`piper_elevator_manipulation` 和 `piper_hardware` 里也各有一份关节限位表。
-同一套协议常量目前散布在至少三处。
+**现状证据**：旧的 `piper_press_hardware` 已移除，但
+`piper_elevator_manipulation` 和 `piper_hardware` 里仍各有一份关节限位表。
+同一套协议常量目前仍散布在至少两处。
 
 **风险**：改一处忘另一处，就会出「两套限位不一致」的隐蔽 bug。
 
