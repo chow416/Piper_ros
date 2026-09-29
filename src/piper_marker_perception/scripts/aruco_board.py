@@ -42,10 +42,43 @@ cost is arithmetic on the marker pitch; the benefit is that a pose means the
 same thing whatever OpenCV produced it.
 """
 
+import math
 import os
 
 import cv2
 import numpy as np
+
+
+def resolve_config_path(path, package="piper_marker_perception"):
+    """Find a config file that may be named relative to the package.
+
+    The same script runs two ways -- straight out of the source tree while
+    editing, and through `ros2 run` once installed -- and those two sit at
+    different depths. A name like `config/board.yaml` therefore means two
+    different files depending on how it was launched, which is the sort of
+    thing that works all through development and then fails on the robot.
+
+    So a relative name is tried in three places, in this order: the current
+    directory (what you want while editing), the directory beside this file
+    (the source tree), and the installed package share directory (what works in
+    the field). The path comes back unchanged when nothing matches, so the
+    caller's own open() produces the error.
+    """
+    if not path or os.path.isabs(path):
+        return path
+    here = os.path.dirname(os.path.abspath(__file__))
+    candidates = [path, os.path.join(os.path.dirname(here), path)]
+    try:
+        from ament_index_python.packages import get_package_share_directory
+        candidates.append(
+            os.path.join(get_package_share_directory(package), path))
+    except Exception:                                       # noqa: BLE001
+        pass                              # not a ROS runtime; cwd and source
+    for candidate in candidates:
+        if os.path.exists(candidate):
+            return candidate
+    return path
+
 
 #: Corner positions within one marker, in units of marker side length, expressed
 #: in the marker's own frame (origin at its centre, +Z out of its plane). This
@@ -406,11 +439,13 @@ class CameraIntrinsics:
 
     @classmethod
     def from_yaml(cls, path):
-        """Read either the calibration output or a ROS CameraInfo YAML.
+        """Read a calibration from YAML -- or from JSON, which parses as YAML.
 
-        Both shapes show up in practice -- `calibrateCamera` writes
-        camera_matrix/data, a ROS camera node writes camera_matrix/rows/cols --
-        so both are accepted and the caller gets one object either way.
+        Three spellings of the same two things show up in practice:
+        `calibrateCamera` dumps write `K` and `dist`, a ROS camera node writes
+        `camera_matrix`/`distortion_coefficients`, and our own calibration tool
+        writes `img_size_wh`. All of them are accepted, so any of those files
+        can be handed to any script here without a conversion step.
         """
         import yaml
         with open(path, encoding="utf-8") as handle:
@@ -436,14 +471,21 @@ class CameraIntrinsics:
         else:
             camera_matrix = np.array(node, dtype=float).reshape(3, 3)
 
-        distortion = data.get("distortion_coefficients", data.get("D", []))
+        distortion = (data.get("distortion_coefficients")
+                      or data.get("D") or data.get("dist") or [])
         if isinstance(distortion, dict):
             distortion = distortion.get("data", [])
         dist_coeffs = np.array(distortion or [], dtype=float).ravel()
 
-        size = data.get("image_width"), data.get("image_height")
-        if size[0] is None:
-            size = None
+        # Two fields, or one [width, height] pair. Note that the pair is width
+        # first, like every other image size in this package.
+        size = None
+        if data.get("image_width") is not None:
+            size = (data["image_width"], data["image_height"])
+        else:
+            pair = data.get("img_size_wh") or data.get("image_size")
+            if pair is not None:
+                size = tuple(pair)
 
         return cls(camera_matrix, dist_coeffs, size, source=path)
 
@@ -458,10 +500,60 @@ class CameraIntrinsics:
             raise ValueError(f"{path} is neither a file nor a directory")
         candidates = sorted(
             os.path.join(path, name) for name in os.listdir(path)
-            if name.endswith((".yaml", ".yml")))
+            if name.endswith((".yaml", ".yml", ".json")))
         if not candidates:
-            raise ValueError(f"no .yaml/.yml in {path}")
+            raise ValueError(f"no .yaml/.yml/.json in {path}")
         return cls.from_yaml(candidates[-1])
+
+    @property
+    def horizontal_fov_deg(self):
+        """Field of view across the frame, from fx. None without a size.
+
+        Worth having as a number rather than as an intuition: it is the one
+        figure that makes a wrong focal length obvious, because a lens's field
+        of view is a physical property you can look up and a focal length is
+        not.
+        """
+        if self.image_size is None:
+            return None
+        return math.degrees(2.0 * math.atan(self.image_size[0] / (2.0 * self.fx)))
+
+    @property
+    def vertical_fov_deg(self):
+        if self.image_size is None:
+            return None
+        return math.degrees(2.0 * math.atan(self.image_size[1] / (2.0 * self.fy)))
+
+    def scaled_to(self, width, height):
+        """Re-express this model for a frame of a different size.
+
+        fx, fy and the principal point are all in pixels, so a plain resize
+        multiplies them by the linear factor. The distortion coefficients do
+        not change: they are functions of the *normalised* radius, which a
+        resize leaves alone. Correct to the extent that both sizes cover the
+        same field of view, which is the usual UVC behaviour but not a promise.
+
+        Returns None when there is nothing to do -- no size recorded, or the
+        size already matches -- so a caller can read None as "no adjustment was
+        needed" and not as a failure.
+        """
+        if self.image_size is None:
+            return None
+        old_width, old_height = self.image_size
+        if (int(old_width), int(old_height)) == (int(width), int(height)):
+            return None
+        if old_width <= 0 or old_height <= 0:
+            return None
+
+        scale_x = width / float(old_width)
+        scale_y = height / float(old_height)
+        matrix = self.camera_matrix.copy()
+        matrix[0, 0] *= scale_x
+        matrix[0, 2] *= scale_x
+        matrix[1, 1] *= scale_y
+        matrix[1, 2] *= scale_y
+        return CameraIntrinsics(matrix, self.dist_coeffs, (width, height),
+                                source=self.source)
 
     def __repr__(self):
         return (f"CameraIntrinsics(fx={self.fx:.1f}, fy={self.fy:.1f}, "

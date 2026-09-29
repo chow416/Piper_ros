@@ -12,6 +12,7 @@ install(FILES scripts/aruco_board.py
         DESTINATION lib/${PROJECT_NAME})
 install(PROGRAMS scripts/make_board.py
         scripts/detect_board.py
+        scripts/check_intrinsics.py
         scripts/selftest_offline.py
         scripts/selftest_bridge.py
         scripts/marker_locator.py

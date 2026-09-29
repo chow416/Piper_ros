@@ -26,11 +26,10 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from aruco_board import (BoardSpec, CameraIntrinsics,  # noqa: E402
-                         annotate, detect)
+                         annotate, detect, resolve_config_path)
 
-DEFAULT_CONFIG = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "config", "board.yaml")
+#: A name, not a path -- see `resolve_config_path`.
+DEFAULT_CONFIG = "config/board.yaml"
 
 IMAGE_SUFFIXES = (".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff")
 
@@ -73,7 +72,7 @@ def main():
     parser.add_argument("--quiet", action="store_true")
     args = parser.parse_args()
 
-    spec = BoardSpec.from_yaml(args.config)
+    spec = BoardSpec.from_yaml(resolve_config_path(args.config))
     intrinsics = CameraIntrinsics.from_file_or_directory(args.camera_info)
 
     if not args.quiet:

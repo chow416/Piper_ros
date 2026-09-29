@@ -47,6 +47,7 @@ import time
 import numpy as np
 import rclpy
 from geometry_msgs.msg import PoseStamped
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import (DurabilityPolicy, HistoryPolicy, QoSProfile,
                        ReliabilityPolicy)
@@ -103,9 +104,18 @@ class OffsetTeacher(Node):
         self.board_stamp = message.header.stamp
 
     def spin_for(self, seconds):
+        """Pump the executor for a while, giving up quietly on SIGTERM.
+
+        `spin_once` raises out of the executor once the context has been shut
+        down from a signal handler, which is how this process normally ends.
+        Returning early instead lets the caller's own loop notice and finish.
+        """
         deadline = time.monotonic() + seconds
         while time.monotonic() < deadline:
-            rclpy.spin_once(self, timeout_sec=0.05)
+            try:
+                rclpy.spin_once(self, timeout_sec=0.05)
+            except ExternalShutdownException:
+                return
 
     def fresh_board(self, max_age=1.0):
         """The board pose, if it is recent enough to belong to this moment."""

@@ -49,6 +49,7 @@ import cv2
 import numpy as np
 import rclpy
 from geometry_msgs.msg import PoseStamped
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.parameter import Parameter
 from rclpy.qos import (DurabilityPolicy, HistoryPolicy, QoSProfile,
@@ -59,12 +60,13 @@ from tf2_ros import Buffer, TransformListener
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from aruco_board import (BoardSpec, CameraIntrinsics,      # noqa: E402
-                         annotate, detect)
+                         annotate, detect, resolve_config_path)
 from press_targets import quaternion_from_matrix, transform_to_matrix  # noqa: E402
 
-DEFAULT_CONFIG = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "config", "board.yaml")
+#: A name rather than a path: the same file sits at a different depth in the
+#: source tree than it does under `ros2 run`, and `resolve_config_path` knows
+#: both. Hardcoding a path here used to work in development and fail on install.
+DEFAULT_CONFIG = "config/board.yaml"
 
 DEFAULT_CAMERA_FRAME = "wrist_depth_camera_optical_frame"
 
@@ -130,29 +132,6 @@ def resolve_device(requested, hints=("orbbec", "dabai")):
         if any(h in name for h in lowered) and os.path.exists(node):
             return node
     return None
-
-
-def resolve_config_path(path):
-    """Absolute path to a config file, accepting a package-relative name.
-
-    A params file cannot know where the workspace is mounted, so `config/x.yaml`
-    has to mean the same thing from any working directory. Absolute paths and
-    paths relative to the current directory are honoured first; only then is the
-    installed share directory tried.
-    """
-    if not path:
-        return path
-    if os.path.exists(path):
-        return path
-    try:
-        from ament_index_python.packages import get_package_share_directory
-        candidate = os.path.join(
-            get_package_share_directory("piper_marker_perception"), path)
-        if os.path.exists(candidate):
-            return candidate
-    except Exception:                                       # noqa: BLE001
-        pass
-    return path                 # let the caller report its own failure
 
 
 class JointStability:
@@ -233,7 +212,13 @@ class MarkerLocator(Node):
         self.max_distance = float(self.get_parameter("max_distance_m").value)
         self.require_stationary = bool(
             self.get_parameter("require_stationary").value)
-        self.publish_debug = bool(
+        # Named `want_debug` rather than `publish_debug`: a method of that name
+        # exists a few hundred lines down, and an attribute of the same name
+        # shadows it without a word of complaint. The failure then shows up as
+        # "'bool' object is not callable" the first time a board is actually
+        # seen -- which is to say, never during development, because there is
+        # usually nothing in front of the camera.
+        self.want_debug = bool(
             self.get_parameter("publish_debug_image").value)
 
         self.intrinsics = self._load_intrinsics()
@@ -278,8 +263,7 @@ class MarkerLocator(Node):
             intrinsics = CameraIntrinsics.from_file_or_directory(resolved)
             self.get_logger().info(f"intrinsics from {resolved}: {intrinsics}")
             return intrinsics
-        fallback = os.path.join(os.path.dirname(DEFAULT_CONFIG),
-                                "camera_info_nominal.yaml")
+        fallback = resolve_config_path("config/camera_info_nominal.yaml")
         intrinsics = CameraIntrinsics.from_yaml(fallback)
         self.get_logger().warn(
             f"no camera_info given, using the provisional matrix in "
@@ -316,7 +300,46 @@ class MarkerLocator(Node):
         capture.set(cv2.CAP_PROP_FPS, fps)
         capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         self.device = device
+
+        # What was asked for and what was granted differ more often than you
+        # would like. A webcam that cannot do the requested size does not
+        # refuse; it quietly hands back the nearest mode it has. Since the
+        # intrinsics belong to a specific frame size, a surprise here shows up
+        # as a wrong distance rather than as a failed start, so read it back.
+        self.frame_size = (int(capture.get(cv2.CAP_PROP_FRAME_WIDTH)),
+                           int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT)))
+        if self.frame_size != (width, height):
+            self.get_logger().warn(
+                f"asked the camera for {width}x{height}, it gave "
+                f"{self.frame_size[0]}x{self.frame_size[1]}")
+        self.intrinsics = self._reconciled_intrinsics(self.frame_size)
         return capture
+
+    def _reconciled_intrinsics(self, frame_size):
+        """Make the intrinsics agree with the frame size actually arriving.
+
+        A calibration is only valid at the resolution it was measured at. A
+        640x480 calibration driving a 1280x960 frame is not a small error: fx,
+        fy and both principal point coordinates are all a factor of two out, so
+        every distance is too. It is also invisible from the result, which
+        still looks entirely self-consistent -- the board is simply reported
+        twice as far away as it really is.
+        """
+        scaled = self.intrinsics.scaled_to(*frame_size)
+        if scaled is None:
+            if self.intrinsics.image_size is None:
+                self.get_logger().warn(
+                    "the calibration records no image size, so there is no "
+                    f"way to check it against the {frame_size[0]}x"
+                    f"{frame_size[1]} frame; assuming they match")
+            return self.intrinsics
+        self.get_logger().warn(
+            f"calibration is for {self.intrinsics.image_size[0]}x"
+            f"{self.intrinsics.image_size[1]} but the camera runs at "
+            f"{frame_size[0]}x{frame_size[1]}; rescaling fx, fy and the "
+            "principal point. Correct only if both sizes cover the same field "
+            "of view -- usually true for UVC, not guaranteed.")
+        return scaled
 
     def _describe_startup(self):
         mode = (f"publishing in '{self.target_frame}'"
@@ -324,9 +347,17 @@ class MarkerLocator(Node):
                 f"publishing in '{self.camera_frame}' (no robot needed)")
         self.get_logger().info(f"{self.spec}")
         self.get_logger().info(f"camera {self.device} @ "
-                               f"{int(self.get_parameter('width').value)}x"
-                               f"{int(self.get_parameter('height').value)}, "
+                               f"{self.frame_size[0]}x{self.frame_size[1]}, "
                                f"{mode}")
+        # Printing the field of view rather than only the focal length, because
+        # the field of view is the number that can be checked against physics.
+        # A 16 degree lens on a webcam bracket is visibly impossible; an
+        # fx of 2299 is not.
+        if self.intrinsics.horizontal_fov_deg is not None:
+            self.get_logger().info(
+                f"lens {self.intrinsics.horizontal_fov_deg:.1f} x "
+                f"{self.intrinsics.vertical_fov_deg:.1f} deg, "
+                f"fx={self.intrinsics.fx:.1f} fy={self.intrinsics.fy:.1f}")
         self.get_logger().info(
             f"gates: markers >= {self.min_markers}, rms <= {self.max_reproj} px, "
             f"{self.min_distance}-{self.max_distance} m"
@@ -417,7 +448,7 @@ class MarkerLocator(Node):
                 f"'{frame_id}'")
 
     def publish_debug(self, frame, result):
-        if not self.publish_debug:
+        if not self.want_debug:
             return
         now = time.monotonic()
         if now - self._last_debug < self.debug_period:
@@ -500,6 +531,12 @@ def main(argv=None):
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
+        pass
+    except ExternalShutdownException:
+        # `timeout`, or a systemd stop, tears the context down underneath
+        # spin(), which then raises out of the executor. That is an ordinary way
+        # for this process to end and it does not deserve a page of traceback --
+        # noise like that is how a real failure goes unnoticed.
         pass
     finally:
         # rclpy installs signal handlers that shut the context down before the

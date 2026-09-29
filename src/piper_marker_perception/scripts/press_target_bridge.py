@@ -42,6 +42,7 @@ import sys
 import rclpy
 import numpy as np
 from geometry_msgs.msg import PoseStamped
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.parameter import Parameter
 from rclpy.qos import (DurabilityPolicy, HistoryPolicy, QoSProfile,
@@ -51,6 +52,7 @@ from rclpy.time import Time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from press_targets import (ConfigError, PressTargetSet,   # noqa: E402
                            matrix_from_pose_stamped, quaternion_for_direction)
+from aruco_board import resolve_config_path              # noqa: E402
 
 DEFAULT_BOARD_TOPIC = "/perception/board_pose"
 DEFAULT_TARGET_TOPIC = "/press/target_pose"
@@ -106,7 +108,8 @@ class PressTargetBridge(Node):
                 "        ros2 run piper_marker_perception press_target_bridge.py "
                 "--ros-args -p target:=red")
 
-        config_path = self.get_parameter("config").value or _default_config()
+        config_path = resolve_config_path(
+            self.get_parameter("config").value or "config/board.yaml")
         targets = PressTargetSet.from_yaml(config_path)
         self.target = targets[name]
         self.target_name = name
@@ -256,20 +259,6 @@ class PressTargetBridge(Node):
             self.rejected = 0
 
 
-def _default_config():
-    """board.yaml from the installed share directory, or the source tree."""
-    try:
-        from ament_index_python.packages import get_package_share_directory
-        candidate = os.path.join(get_package_share_directory(
-            "piper_marker_perception"), "config", "board.yaml")
-        if os.path.exists(candidate):
-            return candidate
-    except Exception:                                       # noqa: BLE001
-        pass
-    return os.path.join(os.path.dirname(os.path.dirname(
-        os.path.abspath(__file__))), "config", "board.yaml")
-
-
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--target", default=None,
@@ -300,6 +289,10 @@ def main(argv=None):
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
+        pass
+    except ExternalShutdownException:
+        # SIGTERM tears the context down underneath spin(), which then raises
+        # out of the executor. An ordinary way for this to end.
         pass
     finally:
         # rclpy shuts the context down from its own signal handler, so the

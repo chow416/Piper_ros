@@ -26,11 +26,10 @@ import cv2
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from aruco_board import BoardSpec                        # noqa: E402
+from aruco_board import BoardSpec, resolve_config_path    # noqa: E402
 
-DEFAULT_CONFIG = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "config", "board.yaml")
+#: A name, not a path -- see `resolve_config_path`.
+DEFAULT_CONFIG = "config/board.yaml"
 
 
 def render_board(spec, dpi, margin_m=0.010, scale_check=True,
@@ -402,7 +401,7 @@ def main():
                              "origin and printing instructions printed on it")
     args = parser.parse_args()
 
-    spec = BoardSpec.from_yaml(args.config)
+    spec = BoardSpec.from_yaml(resolve_config_path(args.config))
 
     if args.page == "a4":
         render_a4(spec, args.dpi, args.out, margin_m=args.margin_mm / 1000.0)

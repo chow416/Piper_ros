@@ -21,7 +21,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from aruco_board import (BoardSpec, CameraIntrinsics,  # noqa: E402
-                         detect, annotate)
+                         annotate, detect, resolve_config_path)
 from make_board import render_board                   # noqa: E402
 
 #: Matches the DaBai's derived prior at 1920x1080 (fx ~ 1060 px).
@@ -145,14 +145,12 @@ def pose_error(expected_rotation, expected_position, detection):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config", default=os.path.join(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-        "config", "board.yaml"))
+    parser.add_argument("--config", default="config/board.yaml")
     parser.add_argument("--save-debug", default="",
                         help="write the last synthetic view here")
     args = parser.parse_args()
 
-    spec = BoardSpec.from_yaml(args.config)
+    spec = BoardSpec.from_yaml(resolve_config_path(args.config))
     # No ruler in the test render: it would be projected along with the board
     # and land in the frame as a stray line below it.
     board_image, pixels_per_metre = render_board(spec, dpi=300,
