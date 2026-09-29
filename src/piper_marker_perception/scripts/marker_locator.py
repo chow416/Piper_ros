@@ -179,9 +179,12 @@ class MarkerLocator(Node):
         self.declare_parameter("camera_info", "")
         self.declare_parameter("device", "/dev/video2")
         self.declare_parameter("device_hint", "orbbec,dabai")
-        self.declare_parameter("width", 1920)
-        self.declare_parameter("height", 1080)
-        self.declare_parameter("fps", 15)
+        # 640x480 because that is the only size this camera has a calibration
+        # for. Defaulting to the sensor's native size would mean every run
+        # without a params file rescales the intrinsics and warns about it.
+        self.declare_parameter("width", 640)
+        self.declare_parameter("height", 480)
+        self.declare_parameter("fps", 30)
         self.declare_parameter("warmup_frames", 30)
         self.declare_parameter("process_rate_hz", 5.0)
         self.declare_parameter("debug_rate_hz", 2.0)
@@ -263,12 +266,17 @@ class MarkerLocator(Node):
             intrinsics = CameraIntrinsics.from_file_or_directory(resolved)
             self.get_logger().info(f"intrinsics from {resolved}: {intrinsics}")
             return intrinsics
-        fallback = resolve_config_path("config/camera_info_nominal.yaml")
+        # The fallback is a real calibration rather than a provisional one, so
+        # it is worth saying which resolution it belongs to and stopping there.
+        # A matrix that is right at one size and wrong at another is more
+        # dangerous than a placeholder nobody trusts.
+        fallback = resolve_config_path(
+            "config/camera_info_orbbec_640x480.yaml")
         intrinsics = CameraIntrinsics.from_yaml(fallback)
         self.get_logger().warn(
-            f"no camera_info given, using the provisional matrix in "
-            f"{os.path.basename(fallback)}. Distances are good to a few "
-            f"centimetres at best until the real calibration arrives.")
+            f"no camera_info given, using {os.path.basename(fallback)}, "
+            f"measured with this camera at 640x480. At any other resolution "
+            f"it is a plausible-looking guess; pass camera_info explicitly.")
         return intrinsics
 
     def _open_camera(self):
@@ -340,11 +348,12 @@ class MarkerLocator(Node):
             "principal point.\n"
             "    That assumes both sizes cover the same field of view, which is "
             "not always\n"
-            "    so: on the C270, 640x480 covers 43.5 deg where 1280x960 "
-            "covers 49.2, and\n"
-            "    this rescale then reads distances about 15 per cent long. "
-            "Prefer running\n"
-            "    at the resolution the calibration was measured at.")
+            "    so: one camera measured here covered 43.5 deg at 640x480 "
+            "where 1280x960\n"
+            "    covered 49.2, and the rescale then read distances about 15 "
+            "per cent long.\n"
+            "    Prefer running at the resolution the calibration was measured "
+            "at.")
         return scaled
 
     def _describe_startup(self):

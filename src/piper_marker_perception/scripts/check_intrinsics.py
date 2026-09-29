@@ -30,8 +30,8 @@ pass `--lens` or `--expect-fov-deg` and the script will compare.
 
 Usage
 -----
-    python3 check_intrinsics.py ../config/camera_info_c270_nominal.yaml
-    python3 check_intrinsics.py intrinsics.json --lens c270
+    python3 check_intrinsics.py ../config/camera_info_orbbec_640x480.yaml \
+        --lens orbbec
     python3 check_intrinsics.py intrinsics.json --capture-size 1280x960
 
 Exits non-zero when any check fails, so it can be wired into a test.
