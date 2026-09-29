@@ -51,6 +51,17 @@ struct PressTaskParameters {
   Eigen::Vector3d target_position;
   Eigen::Vector3d press_direction;
   double approach_distance;
+  //: How far short of `target_position` the approach stops. The press phase
+  //: then covers this plus `press_depth`, so the rod still ends up
+  //: `press_depth` past the aim point -- the standoff moves where the approach
+  //: *stops*, not where the press *ends*.
+  //:
+  //: It exists because the aim point is only as good as the calibration behind
+  //: it, and anything that puts it inside the real surface turns an approach
+  //: into a collision. With a standoff the same error eats a visible gap
+  //: instead, and that gap is something an operator can put a shim into and
+  //: measure.
+  double contact_standoff;
   double press_depth;
 };
 
@@ -395,6 +406,11 @@ PlanningTask createTask(
   const Eigen::Vector3d direction = parameters.press_direction.normalized();
   const Eigen::Vector3d pre_press_position =
       parameters.target_position - parameters.approach_distance * direction;
+  // The approach stops `contact_standoff` short of the aim point rather than on
+  // it. See the note on the field: the standoff is what keeps a calibration
+  // error from being spent on the target instead of on a gap.
+  const Eigen::Vector3d contact_position =
+      parameters.target_position - parameters.contact_standoff * direction;
   const Eigen::Vector3d pressed_position =
       parameters.target_position + parameters.press_depth * direction;
 
@@ -444,7 +460,7 @@ PlanningTask createTask(
           direction, "pre-press waypoint");
       contact_joints = solveWaypoint(
           ik_solver, task->getRobotModel(), pre_press_joints,
-          parameters.target_position, direction, "contact waypoint");
+          contact_position, direction, "contact waypoint");
       pressed_joints = solveWaypoint(
           ik_solver, task->getRobotModel(), contact_joints, pressed_position,
           direction, "pressed waypoint");
@@ -636,10 +652,12 @@ int executePressSequence(
   if (const auto tcp = travel.latestTcpPosition()) {
     RCLCPP_INFO(node->get_logger(),
                 "Actual TCP at approach end: (%.4f, %.4f, %.4f), "
-                "axial offset from target %.4f m",
+                "axial offset from target %.4f m; against a commanded standoff "
+                "of %.1f mm",
                 tcp->x(), tcp->y(), tcp->z(),
                 (*tcp - parameters.target_position).dot(
-                    parameters.press_direction));
+                    parameters.press_direction),
+                parameters.contact_standoff * 1000.0);
   }
   if (require_contact && contact.isContactActive()) {
     RCLCPP_ERROR(node->get_logger(),
@@ -652,7 +670,10 @@ int executePressSequence(
   const double travel_margin = require_contact
       ? 0.0
       : getOrDeclareParameter(node, "hardware_travel_margin_m", 0.003);
-  const double travel_cap = parameters.press_depth + travel_margin;
+  // The press phase starts at the standoff, so the travel it has to cover is
+  // the standoff plus the intended penetration.
+  const double travel_cap =
+      parameters.contact_standoff + parameters.press_depth + travel_margin;
   RCLCPP_INFO(node->get_logger(),
               "Executing %s press (planned travel %.4f m, safety cap %.4f m)",
               require_contact ? "contact-limited" : "fixed-travel",
@@ -772,6 +793,21 @@ bool validatePressParameters(const rclcpp::Node::SharedPtr& node,
       parameters.approach_distance > 0.15) {
     RCLCPP_ERROR(node->get_logger(),
                  "approach_distance must be in [0.01, 0.15] m");
+    return false;
+  }
+  if (!std::isfinite(parameters.contact_standoff) ||
+      parameters.contact_standoff < 0.0 ||
+      parameters.contact_standoff > 0.05) {
+    RCLCPP_ERROR(node->get_logger(),
+                 "contact_standoff_m must be in [0, 0.05] m");
+    return false;
+  }
+  if (parameters.contact_standoff >= parameters.approach_distance) {
+    RCLCPP_ERROR(node->get_logger(),
+                 "contact_standoff_m (%.4f) must be smaller than "
+                 "approach_distance (%.4f), or the approach would already be "
+                 "past the contact point",
+                 parameters.contact_standoff, parameters.approach_distance);
     return false;
   }
   if (!std::isfinite(parameters.press_depth) ||
@@ -1000,6 +1036,10 @@ int main(int argc, char** argv) {
 
   const double approach_distance =
       getOrDeclareParameter(node, "approach_distance", 0.030);
+  // 5 mm by default. Enough that the approach visibly stops clear of the target
+  // on hardware, which is also what makes the gap measurable.
+  const double contact_standoff =
+      getOrDeclareParameter(node, "contact_standoff_m", 0.005);
   const double press_depth = getOrDeclareParameter(node, "press_depth", 0.004);
 
   std::unique_ptr<piper_elevator_manipulation::TargetSource> target_channel;
@@ -1056,6 +1096,7 @@ int main(int argc, char** argv) {
       parameters.target_position = target->position;
       parameters.press_direction = target->press_direction;
       parameters.approach_distance = approach_distance;
+      parameters.contact_standoff = contact_standoff;
       parameters.press_depth = press_depth;
     } else {
       parameters =
@@ -1068,7 +1109,7 @@ int main(int argc, char** argv) {
                   getOrDeclareParameter(node, "press_direction_x", 1.0),
                   getOrDeclareParameter(node, "press_direction_y", 0.0),
                   getOrDeclareParameter(node, "press_direction_z", 0.0)),
-              approach_distance, press_depth};
+              approach_distance, contact_standoff, press_depth};
     }
 
     if (!validatePressParameters(node, parameters)) {

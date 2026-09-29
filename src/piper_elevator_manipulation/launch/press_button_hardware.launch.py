@@ -31,7 +31,7 @@ Then, with the arm enabled by piper_hardware and the workspace clear:
       execute:=true hardware_enable:=true \\
       button_x:=0.30 button_y:=0.00 button_z:=0.24 \\
       press_direction_x:=1.0 press_direction_y:=0.0 press_direction_z:=0.0 \\
-      approach_distance:=0.030 press_depth:=0.003
+      approach_distance:=0.030 contact_standoff_m:=0.005 press_depth:=0.003
 """
 
 import os
@@ -63,6 +63,7 @@ def generate_launch_description():
     press_direction_sign = LaunchConfiguration("press_direction_sign")
     max_presses = LaunchConfiguration("max_presses")
     approach_distance = LaunchConfiguration("approach_distance")
+    contact_standoff = LaunchConfiguration("contact_standoff_m")
     press_depth = LaunchConfiguration("press_depth")
     travel_margin = LaunchConfiguration("hardware_travel_margin_m")
     start_moveit = LaunchConfiguration("start_moveit")
@@ -109,6 +110,7 @@ def generate_launch_description():
                 ),
                 "max_presses": ParameterValue(max_presses, value_type=int),
                 "approach_distance": approach_distance,
+                "contact_standoff_m": contact_standoff,
                 "press_depth": press_depth,
                 "hardware_travel_margin_m": travel_margin,
             },
@@ -177,10 +179,26 @@ def generate_launch_description():
             description="Clearance from the surface to the aligned pre-press waypoint.",
         ),
         DeclareLaunchArgument(
+            "contact_standoff_m", default_value="0.005",
+            description=(
+                "How far short of the target the approach stops, in metres. "
+                "The press phase then covers this plus press_depth, so it "
+                "moves where the approach stops, NOT where the press ends -- "
+                "the rod still reaches press_depth past the aim point. What "
+                "it buys is failure tolerance: any error that puts the aim "
+                "point inside the real surface is spent on this gap instead "
+                "of on the target, and the gap is something you can see and "
+                "put a shim into. Set it to 0 to restore the old behaviour."
+            ),
+        ),
+        DeclareLaunchArgument(
             "press_depth", default_value="0.003",
             description=(
-                "Fixed forward travel of the press. There is no contact sensor, so "
-                "this value IS the stop condition. Keep it small on hardware."
+                "Fixed forward travel of the press, measured past the aim "
+                "point. There is no contact sensor, so this value IS the stop "
+                "condition. On a real button it should be the button's own "
+                "travel -- 1 to 2 mm for an elevator call button -- because "
+                "anything past that bottoms out and loads the panel."
             ),
         ),
         DeclareLaunchArgument(
