@@ -51,12 +51,21 @@ PASS, WARN, FAIL = "PASS", "WARN", "FAIL"
 
 #: Fields of view from the datasheets. Only used to turn "this focal length is
 #: odd" into "distances will read this many times too far", which is the form of
-#: the problem that tells you what to do about it. The C270's 60 degrees is
-#: quoted diagonally and the Orbbec's 84.3 horizontally -- worth keeping
-#: straight, because comparing the two directly is a 40 per cent error.
+#: the problem that tells you what to do about it.
+#:
+#: `full_size` is the sensor mode the figure was quoted for, because the figure
+#: that survives a change of resolution is not always the one that was quoted.
+#: The C270 quotes 60 degrees diagonally and every mode it offers is 4:3, so the
+#: diagonal splits the same way at each. The Orbbec quotes 84.3 horizontally on
+#: a 16:9 sensor, and 640x480 is that frame with the sides cropped off -- what
+#: survives there is the 54 degrees vertically, and the horizontal is down to
+#: 67.7. Comparing the cropped axis reports a perfectly good calibration as
+#: 1.35x wrong, which is how this line got written twice.
 LENSES = {
-    "c270": ("Logitech C270", {"diagonal_deg": 60.0}),
-    "orbbec": ("Orbbec DaBai DCW2", {"horizontal_deg": 84.3}),
+    "c270": ("Logitech C270",
+             {"diagonal_deg": 60.0, "full_size": (1280, 960)}),
+    "orbbec": ("Orbbec DaBai DCW2",
+               {"vertical_deg": 54.0, "full_size": (1920, 1080)}),
 }
 
 #: A calibration is a fit to a set of board poses, and radial distortion is only
@@ -158,15 +167,52 @@ def raw_extras(path):
     return {key: data[key] for key in keys if key in data}
 
 
-def expected_hfov_deg(lens, width, height):
-    """The datasheet field of view, expressed across the frame."""
+def reference_fov_deg(lens, width, height):
+    """The datasheet field of view across the axis this capture still has.
+
+    A camera offering several resolutions usually keeps one field of view and
+    crops the other, and which one it keeps follows from the aspect ratios: a
+    capture narrower than the sensor has lost its sides and kept its height, a
+    capture wider has lost its top and bottom.
+
+    Returns `(degrees, "horizontal"|"vertical", note)`.
+    """
     _, spec = LENSES[lens]
-    if "horizontal_deg" in spec:
-        return spec["horizontal_deg"]
-    # Given diagonally: split it across the aspect ratio to get the width.
-    half_diagonal = math.tan(math.radians(spec["diagonal_deg"]) / 2.0)
-    diagonal = math.hypot(width, height)
-    return math.degrees(2.0 * math.atan(half_diagonal * width / diagonal))
+    full_w, full_h = spec.get("full_size", (width, height))
+    if width / height >= full_w / full_h:
+        axis, note = "horizontal", ""
+    else:
+        axis = "vertical"
+        note = (f"传感器是 {full_w}x{full_h}，{width}x{height} 是 4:3 — 只裁掉了左右，\n"
+                f"    高度方向的视场留下来了，横向的从 "
+                f"{_fov_across(spec, full_w, full_h, 'horizontal'):.1f}° "
+                f"降到 {_fov_across(spec, width, height, 'horizontal'):.1f}°。\n"
+                "    所以这里比的是纵向。")
+    if f"{axis}_deg" in spec:
+        return spec[f"{axis}_deg"], axis, note
+    return (_fov_across(spec, width, height, axis), axis, note)
+
+
+def _fov_across(spec, width, height, axis):
+    """One axis of the datasheet field of view, for a given frame size.
+
+    Preference order: the figure written down for that axis, then the other axis
+    carried across the aspect ratio, then the diagonal split across it. The
+    Orbbec needs the second of those -- its 84.3 is horizontal and the surviving
+    axis at 640x480 is the vertical one -- and carrying 54.0 across 16:9 gives
+    84.3 right back, which is the check that the two figures are one lens.
+    """
+    if f"{axis}_deg" in spec:
+        return spec[f"{axis}_deg"]
+    other = "vertical" if axis == "horizontal" else "horizontal"
+    if f"{other}_deg" in spec:
+        half = math.tan(math.radians(spec[f"{other}_deg"]) / 2.0)
+        ratio = (width / height) if axis == "horizontal" else (height / width)
+        return math.degrees(2.0 * math.atan(half * ratio))
+    half = math.tan(math.radians(spec["diagonal_deg"]) / 2.0)
+    full_w, full_h = spec.get("full_size", (width, height))
+    span = width if axis == "horizontal" else height
+    return math.degrees(2.0 * math.atan(half * span / math.hypot(full_w, full_h)))
 
 
 # -- the checks ----------------------------------------------------------
@@ -246,12 +292,14 @@ def screen(intrinsics, report, args):
         as_text = "  ".join(f"{term:+.5f}" for term in terms)
         if cancellation > 6.0:
             report.add(
-                FAIL, f"三个径向项几乎完全抵消（量级是被抵消后的 "
-                      f"{cancellation:.1f} 倍）",
+                WARN, f"三个径向项互相抵消明显（{cancellation:.1f} 倍）",
                 f"画面四角处  k1r² / k2r⁴ / k3r⁶ =  {as_text}\n"
                 f"              合计 {total:+.5f}，而量级之和 {magnitude:.5f}\n"
-                "这就是退化解的样子：各项在互相补偿，而不是在描述一只镜头。\n"
-                "重投影误差可以同时仍然很小 —— 所以那个数不能用来判断。")
+                "⚠️ 单看这一项说明不了问题，所以这里只是提醒。广角镜头的归一化\n"
+                "   半径本来就大（r 到 0.85，r⁴ = 0.5、r⁶ = 0.37），系数不大也能\n"
+                "   抵消到这个程度：Orbbec 那只 80° 对角就到 23 倍，而模型在整个\n"
+                "   画面里偏离无畸变不超过 1%。\n"
+                "   真正的判据是下面那条 —— 出了画面它还像不像一只镜头。")
         elif cancellation > 3.0:
             report.add(WARN, f"径向项抵消明显（{cancellation:.1f} 倍）")
         else:
@@ -263,7 +311,9 @@ def screen(intrinsics, report, args):
         if crossing is not None and crossing < 2.0:
             report.add(
                 FAIL, f"径向因子在画面外 {crossing:.2f} 倍处就翻号了",
-                "翻号之后畸变会把点折过光轴，真实镜头不会这样。")
+                "翻号之后畸变会把点折过光轴，真实镜头不会这样。\n"
+                "这才是退化拟合的确切特征：模型在拟合用的那几个像素之外\n"
+                "立刻失去物理意义。上面那条抵消倍数只是它的倒影。")
         elif crossing is not None:
             report.add(PASS, f"径向因子在画面外 {crossing:.2f} 倍处才翻号")
         else:
@@ -374,23 +424,31 @@ def main():
     # The datasheet comparison, when we have something to compare against.
     inflation = None
     if args.expect_fov_deg or args.lens:
+        note = ""
         if args.expect_fov_deg:
-            reference, source = args.expect_fov_deg, "给定值"
+            reference, axis, source = args.expect_fov_deg, "horizontal", "给定值"
         else:
             name, _ = LENSES[args.lens]
-            reference = expected_hfov_deg(args.lens, width or 640, height or 480)
+            reference, axis, note = reference_fov_deg(
+                args.lens, width or 640, height or 480)
             source = f"{name} 规格书"
-        if intrinsics.horizontal_fov_deg is not None:
-            expected_fx = (width / 2.0) / math.tan(
+        focal = intrinsics.fx if axis == "horizontal" else intrinsics.fy
+        span = width if axis == "horizontal" else height
+        if focal is not None and span:
+            expected_focal = (span / 2.0) / math.tan(
                 math.radians(reference) / 2.0)
-            inflation = intrinsics.fx / expected_fx
-            print(f" ③ 与{source}对照（水平视场 {reference:.1f}°）")
+            inflation = focal / expected_focal
+            label = "水平" if axis == "horizontal" else "纵向"
+            print(f" ③ 与{source}对照（{label}视场 {reference:.1f}°）")
+            if note:
+                for line in note.splitlines():
+                    print(f"     {line}")
             if abs(inflation - 1.0) < 0.10:
                 print(f"     [PASS] 焦距与规格书一致（{inflation:.2f} 倍）")
             else:
                 print(f"     [FAIL] 焦距是规格书的 {inflation:.2f} 倍")
-                print(f"            规格书推出的 fx ≈ {expected_fx:.0f}，"
-                      f"这份是 {intrinsics.fx:.0f}")
+                print(f"            规格书推出的 f ≈ {expected_focal:.0f}，"
+                      f"这份是 {focal:.0f}")
             print()
 
     print("═" * 68)
