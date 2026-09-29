@@ -340,8 +340,8 @@ class MarkerLocator(Node):
             "principal point.\n"
             "    That assumes both sizes cover the same field of view, which is "
             "not always\n"
-            "    so: on the C270, 640x480 covers 41.4 deg where 1280x960 "
-            "covers 46.8, and\n"
+            "    so: on the C270, 640x480 covers 43.5 deg where 1280x960 "
+            "covers 49.2, and\n"
             "    this rescale then reads distances about 15 per cent long. "
             "Prefer running\n"
             "    at the resolution the calibration was measured at.")
