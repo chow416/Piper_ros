@@ -337,8 +337,14 @@ class MarkerLocator(Node):
             f"calibration is for {self.intrinsics.image_size[0]}x"
             f"{self.intrinsics.image_size[1]} but the camera runs at "
             f"{frame_size[0]}x{frame_size[1]}; rescaling fx, fy and the "
-            "principal point. Correct only if both sizes cover the same field "
-            "of view -- usually true for UVC, not guaranteed.")
+            "principal point.\n"
+            "    That assumes both sizes cover the same field of view, which is "
+            "not always\n"
+            "    so: on the C270, 640x480 covers 41.4 deg where 1280x960 "
+            "covers 46.8, and\n"
+            "    this rescale then reads distances about 15 per cent long. "
+            "Prefer running\n"
+            "    at the resolution the calibration was measured at.")
         return scaled
 
     def _describe_startup(self):
