@@ -15,6 +15,8 @@ install(PROGRAMS scripts/make_board.py
         scripts/check_intrinsics.py
         scripts/selftest_offline.py
         scripts/selftest_bridge.py
+        scripts/selftest_handeye.py
+        scripts/hand_eye.py
         scripts/marker_locator.py
         scripts/press_target_bridge.py
         scripts/teach_press_offset.py
