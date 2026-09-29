@@ -171,21 +171,6 @@ def matrix_from_rotation(rotation, translation=(0.0, 0.0, 0.0)):
     return out
 
 
-#: Half a turn about the optical axis. A session captured with `--rotate-180`
-#: stores frames rolled by this much relative to the raw ones, and everything
-#: downstream -- the URDF, `marker_locator` -- works in the raw frame, so board
-#: poses read from such a session have to be turned back. Left-multiplying the
-#: whole 4x4 does it exactly.
-#:
-#: Forgetting this does not announce itself. Every pose picks up the same roll,
-#: so `X @ ROTATED_TO_RAW` fits the data exactly as well as `X` does: the
-#: scatter stays at zero, the five methods still agree, and the extrinsic that
-#: comes out has the camera rolled half a turn inside its mount. On the Orbbec,
-#: whose sensor really is inverted, that is the value someone would nod at.
-ROTATED_TO_RAW = matrix_from_rotation(
-    cv2.Rodrigues(np.array([0.0, 0.0, math.pi]))[0])
-
-
 def rotation_angle_deg(a, b):
     """Angle between two rotations, in degrees."""
     cosine = (np.trace(np.asarray(a) @ np.asarray(b).T) - 1.0) / 2.0
@@ -274,13 +259,8 @@ def load_session_meta(directory):
 
 
 def pairs_from_session(directory, spec, intrinsics, min_markers=6,
-                       max_rms_px=3.0, rotation=0):
+                       max_rms_px=3.0):
     """Run PnP on every image in the session, keeping the ones worth keeping.
-
-    `rotation` is 180 for a session captured with `--rotate-180`, and 0 for the
-    raw frames the workflow recommends. Either way the pairs that come back are
-    in the raw frame, because that is the frame the extrinsic has to be
-expressed in for the URDF and for `marker_locator`.
 
     Returns `(pairs, skipped)`. Skipping is reported rather than silent: a pose
     that failed to detect is information about the session, and half a session
@@ -309,10 +289,7 @@ expressed in for the URDF and for `marker_locator`.
                                   f"> {max_rms_px}"))
             continue
 
-        matrix = result.matrix
-        if rotation:
-            matrix = ROTATED_TO_RAW @ matrix
-        pairs.append(PosePair(name, sample["T_base_tool"], matrix,
+        pairs.append(PosePair(name, sample["T_base_tool"], result.matrix,
                               len(result.marker_ids), result.reproj_rms_px))
     return pairs, skipped
 
@@ -640,9 +617,6 @@ def main():
     parser.add_argument("--optical-rpy", type=parse_rpy,
                         default=OPTICAL_TO_LINK_RPY,
                         help="光学系到机械系的固定旋转，默认取自 xacro")
-    parser.add_argument("--session-rotation", default="auto",
-                        choices=["auto", "0", "180"],
-                        help="会话里的图是否已 180° 旋转；默认读会话头")
     parser.add_argument("--min-markers", type=int, default=6)
     parser.add_argument("--max-rms-px", type=float, default=3.0)
     parser.add_argument("--check-only", action="store_true",
@@ -675,15 +649,6 @@ def main():
         intrinsics = CameraIntrinsics.from_file_or_directory(
             resolve_config_path(args.camera_info))
 
-        # Which frame the stored images are in. The header knows, because
-        # capture_session refuses to mix the two within one session; the flag
-        # is there for a session captured before the header recorded it.
-        if args.session_rotation == "auto":
-            rotation = 180 if (meta.get("rotate_180")
-                               or meta.get("rotated_180")) else 0
-        else:
-            rotation = int(args.session_rotation)
-
         print(f" 板子    {spec}")
         print(f" 内参    {intrinsics}")
         camera = meta.get("camera") or {}
@@ -697,13 +662,9 @@ def main():
                       "           会换算并告警的那种情况，先确认哪个是对的")
         print(f" 坐标系  {meta.get('base_frame', 'base_link')} ← "
               f"{meta.get('tool_frame', 'press_tool_link')}")
-        if rotation:
-            print(" 旋转    会话记录为 180°，已换算回原始帧"
-                  "（marker_locator 用原始帧，那 180° 由本结果吸收）")
         print()
         pairs, skipped = pairs_from_session(
-            session, spec, intrinsics, args.min_markers, args.max_rms_px,
-            rotation=rotation)
+            session, spec, intrinsics, args.min_markers, args.max_rms_px)
 
     report_data(pairs, skipped)
 
@@ -742,11 +703,8 @@ def main():
         return 1
 
     if args.save_pairs:
-        # Saved after the rotation correction, so what comes back out of the
-        # file is already in the raw frame and `--pairs` must not apply it again.
         payload = dict(meta)
         payload.pop("samples", None)
-        payload["cam_board_frame"] = "raw"
         payload["pairs"] = [p.to_dict() for p in pairs]
         with open(args.save_pairs, "w", encoding="utf-8") as handle:
             json.dump(payload, handle, indent=2, ensure_ascii=False)

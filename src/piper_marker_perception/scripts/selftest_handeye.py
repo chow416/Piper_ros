@@ -43,11 +43,10 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from aruco_board import BoardSpec, resolve_config_path     # noqa: E402
 from hand_eye import (METHOD_NAMES, MIN_ROTATION_SPREAD_DEG,   # noqa: E402
-                      OPTICAL_TO_LINK_RPY, ROTATED_TO_RAW, PosePair,
-                      board_in_base, invert, matrix_from_rotation,
-                      matrix_to_rpy, rotation_angle_deg,
-                      rotation_is_usable, rpy_to_matrix, scatter, solve,
-                      trustworthy)
+                      OPTICAL_TO_LINK_RPY, PosePair, board_in_base, invert,
+                      matrix_from_rotation, matrix_to_rpy,
+                      rotation_angle_deg, rotation_is_usable,
+                      rpy_to_matrix, scatter, solve, trustworthy)
 
 #: A plausible wrist camera: 1280x960, a wide-ish lens, mild barrel distortion.
 #: Not either of the real cameras on purpose -- a test that only passes for the
@@ -435,38 +434,6 @@ def main():
         except cv2.error as error:
             print(f"       求解器直接拒绝：{str(error).splitlines()[0][:60]}")
             check("求解器拒绝了这个病态数据集", True)
-    print()
-
-    # -- ⑨ a session captured with --rotate-180 ----------------------------
-    print("  ⑨ 用 --rotate-180 采的会话（图转了半圈）")
-    check("ROTATED_TO_RAW 就是绕光轴半圈",
-          np.allclose(ROTATED_TO_RAW[:3, :3], np.diag([-1.0, -1.0, 1.0]),
-                      atol=1e-12))
-
-    # Every pose picks up the same roll, so it can be absorbed into X: `X @ R`
-    # fits exactly as well as `X` does. Nothing complains, no method disagrees,
-    # and the answer has the camera rolled half a turn in its mount -- which on
-    # the Orbbec, whose sensor really is inverted, is the value someone would
-    # nod at. This is the assertion that keeps that from being shipped.
-    rolled = [PosePair(p.name, p.T_base_end,
-                       ROTATED_TO_RAW @ p.T_cam_board) for p in clean_pairs]
-    X_rolled = solve(rolled, "TSAI")
-    translation_mm, rotation_deg = pose_error(X_rolled, X_true)
-    position_mm, angle_deg = consistency_mm(rolled, X_rolled)
-    print(f"       不换算：散布 {position_mm:.2e} mm / {angle_deg:.2e}°"
-          f"，而外参转角错 {rotation_deg:.2f}°")
-    check(f"散布照样是零（{position_mm:.1e} mm）—— 不会有任何提示",
-          position_mm < 1e-3)
-    check(f"但外参差了 {rotation_deg:.1f}°（应该 180）—— 静默错",
-          abs(rotation_deg - 180.0) < 1.0)
-
-    fixed = [PosePair(p.name, p.T_base_end,
-                      ROTATED_TO_RAW @ p.T_cam_board) for p in rolled]
-    X_fixed = solve(fixed, "TSAI")
-    translation_mm, rotation_deg = pose_error(X_fixed, X_true)
-    check(f"换算回原始帧后精确恢复真值"
-          f"（{translation_mm:.1e} mm / {rotation_deg:.1e}°）",
-          translation_mm < 1e-4 and rotation_deg < 1e-4)
     print()
 
     # -- verdict -----------------------------------------------------------

@@ -14,24 +14,20 @@ The board frame
 +Z is the direction the board faces, so *into* the board is -Z. `detect()`
 returns the pose of exactly this frame in the camera optical frame.
 
-The 180 degree camera roll -- read before changing anything
------------------------------------------------------------
-The sensor in this camera is mounted upside down, so raw frames are rotated by
-180 degrees. Nothing here undoes that, on purpose: the rotation is *absorbed*
-into the hand-eye calibration. Both the intrinsics and the hand-eye solve are
-done on the same raw frames, so the two errors cancel in exactly the way that
-leaves the final `base_link <- optical` transform correct.
+The camera roll -- read before changing anything
+-----------------------------------------------
+There is none. The sensor used to sit upside down inside the housing, and the
+180 degrees that introduced was deliberately left uncorrected and *absorbed*
+into the hand-eye calibration -- which forced a consistency rule across three
+places, because rotating in one of them and not the others gave an answer wrong
+by a fixed rotation that still looked plausible. The camera has since been
+turned over physically, so raw frames arrive the right way up and no part of
+this pipeline corrects for a roll.
 
-That gives a consistency rule spanning three places:
-
-    capture_session.py   stores raw frames
-    the calibrator       solves intrinsics and hand-eye on raw frames
-    this module          detects on raw frames
-
-Rotate in any one of them and not the others and the answer is wrong by a
-rotation that still looks plausible -- the 180 degrees is a fixed rotation about
-the optical axis, so it silently folds into the board pose. If you ever want the
-rotated convention, change it in all three at once.
+Keep it that way. If a camera is ever re-mounted inverted, flip it physically
+rather than reintroducing a rotation here: a 180 degree roll about the optical
+axis is a *fixed* rotation, so it folds into the board pose without a word, and
+the wrong answer is the one that looks tidiest.
 
 Why the object points are built here instead of by cv2.aruco.GridBoard
 ---------------------------------------------------------------------
@@ -299,8 +295,8 @@ def detect(image, camera_matrix, dist_coeffs, spec, detector=None,
     its markers are visible, or the solve fails. Callers gate on
     `reproj_rms_px` afterwards; this function only reports, it does not judge.
 
-    `image` may be colour or greyscale. It must be a raw frame -- see the module
-    docstring on the 180 degree roll.
+    `image` may be colour or greyscale. It must be a raw frame, exactly as the
+    camera delivers it -- see the module docstring on the camera roll.
 
     A board mounted face-down is *not* caught by geometry, and this was measured
     rather than assumed. Seen from behind, every marker is mirrored, mirrored
