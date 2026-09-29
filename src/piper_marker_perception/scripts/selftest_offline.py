@@ -183,8 +183,19 @@ def main():
     check(f"左上角 marker 中心在 (−pitch, +pitch) = ({centre[0]:+.3f}, "
           f"{centre[1]:+.3f})",
           np.allclose(centre[:2], [-spec.pitch, spec.pitch]))
-    check(f"板子尺寸 {spec.width * 1000:.1f} × {spec.height * 1000:.1f} mm",
-          abs(spec.width - 0.110) < 1e-9 and abs(spec.height - 0.110) < 1e-9)
+    # The board's size is a physical fact that changes when someone prints at a
+    # different scale, so assert the relationship that defines it rather than a
+    # number. (An earlier version pinned 110 mm and started failing the moment
+    # the printer scaled the sheet to 90%.)
+    expected_width = (spec.markers_x * spec.marker_length
+                      + (spec.markers_x - 1) * spec.marker_separation)
+    expected_height = (spec.markers_y * spec.marker_length
+                       + (spec.markers_y - 1) * spec.marker_separation)
+    check(f"板子尺寸 {spec.width * 1000:.1f} × {spec.height * 1000:.1f} mm "
+          f"= {spec.markers_x}L+{spec.markers_x - 1}S，且正方形",
+          abs(spec.width - expected_width) < 1e-12
+          and abs(spec.height - expected_height) < 1e-12
+          and abs(spec.width - spec.height) < 1e-12)
     check("板系原点是几何中心 → 所有 marker 中心关于原点对称",
           np.allclose(sum(spec.marker_centres_by_id().values()),
                       np.zeros(2)))

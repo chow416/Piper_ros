@@ -145,13 +145,26 @@ def main():
 
     if args.json:
         with open(args.json, "w", encoding="utf-8") as handle:
-            json.dump({"board": {
-                "dictionary": spec.dictionary_name,
-                "markers_x": spec.markers_x,
-                "markers_y": spec.markers_y,
-                "marker_length": spec.marker_length,
-                "marker_separation": spec.marker_separation,
-            }, "results": results}, handle, indent=2, ensure_ascii=False)
+            json.dump({
+                "board": {
+                    "dictionary": spec.dictionary_name,
+                    "markers_x": spec.markers_x,
+                    "markers_y": spec.markers_y,
+                    "marker_length": spec.marker_length,
+                    "marker_separation": spec.marker_separation,
+                },
+                # The intrinsics are recorded because a pose cannot be read
+                # without them: the same tvec means two different physical
+                # scenes under fx = 1060 and fx = 1386. A results file that
+                # omits this looks complete and cannot be checked later.
+                "camera": {
+                    "info_file": args.camera_info,
+                    "image_size": intrinsics.image_size,
+                    "camera_matrix": intrinsics.camera_matrix.tolist(),
+                    "dist_coeffs": intrinsics.dist_coeffs.tolist(),
+                },
+                "results": results,
+            }, handle, indent=2, ensure_ascii=False)
         if not args.quiet:
             print(f"  结果在 {args.json}")
 

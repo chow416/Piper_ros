@@ -302,8 +302,14 @@ def main(argv=None):
     except KeyboardInterrupt:
         pass
     finally:
-        node.destroy_node()
-        rclpy.shutdown()
+        # rclpy shuts the context down from its own signal handler, so the
+        # cleanup here has to tolerate already having been torn down.
+        try:
+            node.destroy_node()
+        except Exception:                                   # noqa: BLE001
+            pass
+        if rclpy.ok():
+            rclpy.shutdown()
     return 0
 
 

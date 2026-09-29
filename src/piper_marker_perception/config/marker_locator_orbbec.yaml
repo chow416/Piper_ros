@@ -1,0 +1,35 @@
+# marker_locator 参数 —— Orbbec DaBai DCW2（腕部正式相机）
+#
+#     ros2 run piper_marker_perception marker_locator.py \
+#         --ros-args --params-file <包>/config/marker_locator_orbbec.yaml
+#
+# 和 marker_locator_c270.yaml 的差异只有三处：设备匹配名、分辨率、内参文件。
+# 这正是"换相机不用改代码"的全部内容。
+
+marker_locator:
+  ros__parameters:
+    device: "/dev/video2"
+    device_hint: "orbbec,dabai,sonix"
+
+    # ⚠️ 深度相机不在这里 —— 它的深度传感器不是 UVC 设备，要 Orbbec SDK。
+    # 这里用的只是 RGB，走标准 UVC。
+    width: 1920
+    height: 1080
+    fps: 15
+
+    # ⚠️ 同事标定好之后换成他的结果，并确认是 1920×1080 下标的
+    camera_info: "config/camera_info_nominal.yaml"
+
+    min_markers: 6
+    max_reproj_px: 2.0
+    min_distance_m: 0.15
+    max_distance_m: 1.5
+
+    process_rate_hz: 5.0
+    debug_rate_hz: 2.0
+
+    # 需要机械臂系下的位姿时取消注释（要 TF + 手眼标定 + /joint_states）：
+    # target_frame: "base_link"
+
+    # 相机帧名必须和 URDF 里一致，否则查不到 TF
+    # camera_frame: "wrist_depth_camera_optical_frame"

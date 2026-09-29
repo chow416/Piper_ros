@@ -14,6 +14,7 @@ install(PROGRAMS scripts/make_board.py
         scripts/detect_board.py
         scripts/selftest_offline.py
         scripts/selftest_bridge.py
+        scripts/marker_locator.py
         scripts/press_target_bridge.py
         scripts/teach_press_offset.py
         DESTINATION lib/${PROJECT_NAME})

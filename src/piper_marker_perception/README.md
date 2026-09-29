@@ -15,24 +15,42 @@
 | `scripts/press_targets.py` | 核心库：板子→按键的固定变换、四元数构造 |
 | `scripts/make_board.py` | 生成**可打印**的板子图（含 100 mm 校准刻度线）|
 | `scripts/detect_board.py` | 离线命令：吃一张图 → 出位姿 + 重投影误差 |
-| **`scripts/press_target_bridge.py`** | ⭐ **发布 `/press/target_pose`** —— 发布板子位姿进来，按键目标出去 |
-| **`scripts/teach_press_offset.py`** | 教示：用机械臂测出按键相对板子的位置和朝向 |
+| **`scripts/marker_locator.py`** | ⭐ **实时识别**：开相机 → 检测 → 发布板子位姿 + 调试图 |
+| `scripts/press_target_bridge.py` | 发布 `/press/target_pose` —— 板子位姿进来，按键目标出去 |
+| `scripts/teach_press_offset.py` | 教示：用机械臂测出按键相对板子的位置和朝向 |
 | `scripts/selftest_offline.py` | 合成图自测（板子识别），不需要硬件 |
 | `scripts/selftest_bridge.py` | 离线自测（板子→按键几何），不需要硬件 |
 | `config/board.yaml` | 板子定义 **+ 板子→按键的固定关系** |
-
-**还没有**：`camera_publisher`、`marker_locator`（把相机图像变成
-`/perception/board_pose` 的那个节点）。
+| `config/marker_locator_*.yaml` | **每个相机一份**参数（设备、分辨率、内参）|
 
 ```
-现在能测：                                   还差：
-                                           
-  /perception/board_pose ──► 桥 ──► /press/target_pose
-      ↑ 假的也行                             ↑ 验证过了
-                                           
-  相机 ──► marker_locator ──┘
-           ↑ 这个还没写
+相机 ✅ ──► marker_locator ✅ ──► /perception/board_pose
+                                      │
+                                      ├─► press_target_bridge ✅ ──► /press/target_pose
+                                      └─► 或只用来验证识别
 ```
+
+### 快速跑起来
+
+```bash
+# 相机是独占的，先把 cam_view.py 关掉
+python3 scripts/marker_locator.py \
+    --ros-args --params-file config/marker_locator_orbbec.yaml
+```
+
+它会打印板子位姿，并把**画了检测框的实时画面**发到
+`/perception/debug_image/compressed`：
+
+```bash
+ros2 run rqt_image_view rqt_image_view /perception/debug_image/compressed
+```
+
+默认发在**相机光学系**（`wrist_depth_camera_optical_frame`）—— 不需要机械臂、
+不需要 TF、不需要手眼标定，插上相机就能跑。
+
+要用机械臂系下的位姿，加上 `-p target_frame:=base_link`，那就需要
+`robot_state_publisher` + `/joint_states` + 写进 URDF 的手眼标定，
+**而且只有在机械臂停稳时才发**（相机在腕部，运动中时间误差会直接变成位置误差）。
 
 ---
 
@@ -255,6 +273,61 @@ detector = spec.make_detector(cornerRefinementWinSize=7, adaptiveThreshConstant=
 
 `cornerRefinementMethod = CORNER_REFINE_SUBPIX` **不要关** —— 它是精度影响
 最大的一个参数，关掉之后位姿噪声大约差一个数量级。
+
+---
+
+## 换相机：只改配置，不改代码
+
+相机的**全部差异**都在参数文件里，两个现成的：
+
+| 文件 | 相机 |
+|---|---|
+| `config/marker_locator_orbbec.yaml` | Orbbec DaBai DCW2（腕部正式相机）|
+| `config/marker_locator_c270.yaml` | Logitech C270（桌面测试用）|
+
+```bash
+ros2 run piper_marker_perception marker_locator.py \
+    --ros-args --params-file <包>/config/marker_locator_c270.yaml
+```
+
+两者只差三处：
+
+| 参数 | Orbbec | C270 |
+|---|---|---|
+| `device_hint` | `orbbec,dabai,sonix` | `logitech,046d:0825` |
+| `width` / `height` | 1920×1080 | 1280×960 |
+| `camera_info` | `camera_info_nominal.yaml` | `camera_info_c270_nominal.yaml` |
+
+⚠️ **`device_hint` 是必须的**。早期版本把 `"orbbec"` 写死在代码里，结果一个
+完全正常的罗技摄像头永远找不到 —— 它的名字是 `UVC Camera (046d:0825)`。
+
+### 分辨率必须和内参一致
+
+C270 最高只有 **1280×960**，做不到 1080p。填 `1920x1080` 会被 OpenCV
+**静默协商降级**到 1280×960 —— 不报错，但如果内参还按 1920 算，位姿会整体偏掉。
+这两个值成对出现，别只改一个。
+
+### ⚠️ C270 不是倒装的，Orbbec 是
+
+之前反复确认过 **Orbbec 的传感器 180° 倒装**，而那 180° 被**吸收进手眼标定
+结果**里 —— 整套约定（`capture_session.py` 存原始帧、标定用原始帧、识别用原始帧）
+都是围绕它建立的，连标称内参也是按原始帧给的。
+
+**C270 是正装的。** 所以：
+
+- ✅ 拿 C270 跑识别、验证代码 —— 没问题，板子识别和 PnP 与安装方向无关
+- ❌ **不能把两者的标定数据混用** —— 差一个 180°，也就是绕光轴转半圈
+
+### C270 的已知噪音（无害）
+
+```
+Corrupt JPEG data: 3 extraneous bytes before marker 0xd3
+```
+
+罗技在 MJPG 帧尾部多塞了几个字节，libjpeg 会抱怨但**照常解码**。实测
+1280×960 下 9/9 marker 全部检出。试过 `cv2.utils.logging.setLogLevel`
+（OpenCV 4.5.4 没这个属性）和 `OPENCV_LOG_LEVEL` 环境变量（无效）——
+这些消息是 libjpeg 直接写 stderr 的，没接进 OpenCV 的日志系统。压不掉，忍一下。
 
 ---
 

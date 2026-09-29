@@ -1,0 +1,32 @@
+# marker_locator 参数 —— Logitech C270（桌面测试用）
+#
+#     ros2 run piper_marker_perception marker_locator.py \
+#         --ros-args --params-file <包>/config/marker_locator_c270.yaml
+#
+# 换回腕部相机时用 marker_locator_orbbec.yaml，**代码一行都不用改**。
+# 相机的全部差异就是这三个数：设备、分辨率、内参文件。
+
+marker_locator:
+  ros__parameters:
+    # 设备：先试这个路径，不存在就按 device_hint 在 sysfs 里按名字找
+    device: "/dev/video2"
+    device_hint: "logitech,046d:0825"
+
+    # C270 最高 1280×960。⚠️ 它做不到 1080p —— 填 1920×1080 会被静默
+    # 协商降级，此时若内参还按 1920 算，位姿会整体错。
+    width: 1280
+    height: 960
+    fps: 15
+
+    # ⚠️ 必须和上面分辨率一致
+    camera_info: "config/camera_info_c270_nominal.yaml"
+
+    # C270 只有 60° 视场（Orbbec 是 92°），板子在画面里明显更小，
+    # 角点精度更差 —— 门槛相应放宽一点，避免一直在拒。
+    min_markers: 6
+    max_reproj_px: 3.0
+    min_distance_m: 0.15
+    max_distance_m: 1.5
+
+    process_rate_hz: 5.0
+    debug_rate_hz: 2.0
