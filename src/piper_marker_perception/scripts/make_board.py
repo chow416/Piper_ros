@@ -295,7 +295,16 @@ def render_a4_page(spec, dpi, margin_m=0.010):
 
     # Scale check, in its own band below the legend.
     y = int(round(mm(scale_line_mm)))
-    length_px = int(round(0.100 * pixels_per_mm))
+    length_px = int(round(mm(100.0)))
+    # This went out once as a single pixel: `0.100 * pixels_per_mm` mixes metres
+    # with pixels-per-millimetre, and 0.118 rounds to 0. The sheet printed a dot
+    # where the line should be and told the reader in red to go and measure it.
+    # A length that cannot be measured is worse than no length, because it costs
+    # someone a trip to find the ruler and then teaches them the sheet lies.
+    if length_px < mm(20.0):
+        raise ValueError(
+            f"比例线只有 {length_px} px（不足 20 mm）—— 是米/毫米混用，"
+            "不是排版问题")
     x0 = int(round((page.width - length_px) / 2))
     draw.line([(x0, y), (x0 + length_px, y)], fill="black", width=3)
     for fraction in (0.0, 0.5, 1.0):
