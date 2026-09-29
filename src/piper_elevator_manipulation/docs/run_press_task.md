@@ -80,7 +80,14 @@ ros2 run piper_elevator_manipulation go_home.py
 ```
 
 参数在 `config/home_pose.yaml`，当前是
-`joint1=0.0, joint2=+20.05°, joint3=-20.05°, joint4=0.0, joint5=0.0`。
+`joint1=0.0000, joint2=+0.0105, joint3=-0.4215, joint4=0.0000, joint5=+0.6602` rad，
+就是腕部相机把标定板框住的那个位姿。
+
+⚠️ **`joint2` 只有 0.0105 rad（0.6°），离硬限位 0 只差这么多**，而建议的归位区间是
+`[15°, 165°]`。这是为相机视野做的取舍，`go_home.py` 每次都会为此告警。
+实测从这个位姿按压仍然解得出来、落点在几毫米内，但抬 joint2 15° 会更稳 ——
+代价是相机会从标定板上移开，`marker_locator` 就找不到板子了。
+真要抬，得先把板子挪到新视野里，两个一起改。
 
 ### 终端 3 —— 按压任务（常驻）
 
