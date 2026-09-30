@@ -147,6 +147,25 @@ class BoardSpec:
         return (self.markers_y * self.marker_length
                 + (self.markers_y - 1) * self.marker_separation)
 
+    @property
+    def auto_min_markers(self):
+        """How many markers must decode before a pose is worth trusting.
+
+        60% of the board, rounded up: 9 -> 6, 4 -> 3, 1 -> 1. Both sides of
+        that margin are load-bearing. Counting markers is the only signal that
+        catches a face-down board -- a mirrored 3x3 stops decoding 8 of its 9
+        markers, while the survivor still solves to a low-reprojection,
+        confident and *wrong* pose -- so the gate has to sit well below the
+        total. Too close to the total and one unreadable marker blinds a board
+        that is perfectly fine; too low and the flip walks straight through.
+
+        A single marker has no redundancy to spend, so the gate degenerates to
+        "did it decode at all". That is honest rather than reassuring, and it
+        is the reason a lone marker has to be large, square-on and close.
+        """
+        total = self.markers_x * self.markers_y
+        return max(1, (3 * total + 4) // 5)
+
     def marker_id(self, column, row):
         """ID of the marker at (column, row). Row 0 is the *top* row."""
         return self.first_marker_id + row * self.markers_x + column

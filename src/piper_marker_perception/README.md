@@ -237,6 +237,11 @@ python3 scripts/selftest_bridge.py        # 只要 numpy，连 ROS 都不要
 **⇒ `min_markers` 必须设成接近板子上 marker 的总数**（本板子 9 个，建议 ≥ 4，
 严格一点用 ≥ 6）。这是唯一可靠的信号。
 
+默认 `min_markers: 0` 表示**跟随 `board.yaml`**：门槛自动取 marker 总数的 60%
+向上取整（3×3 → 6，单个 → 1）。所以换板子形态只改 `board.yaml` 一个文件，
+不用再记着 `marker_locator_orbbec.yaml` 里还有个数要一起改 —— 两处不一致时的
+表现是"永远说没拍到"，而不是报错。
+
 ### 2. 板子尺寸填实测值
 
 见上面「快速开始」第 1 步。

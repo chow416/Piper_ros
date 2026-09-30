@@ -196,7 +196,7 @@ class MarkerLocator(Node):
         self.declare_parameter("stationary_tolerance_rad", 0.002)
         self.declare_parameter("stationary_samples", 5)
 
-        self.declare_parameter("min_markers", 6)
+        self.declare_parameter("min_markers", 0)
         self.declare_parameter("max_reproj_px", 3.0)
         self.declare_parameter("min_distance_m", 0.15)
         self.declare_parameter("max_distance_m", 1.5)
@@ -209,7 +209,7 @@ class MarkerLocator(Node):
             resolve_config_path(self.get_parameter("config").value))
         self.camera_frame = self.get_parameter("camera_frame").value
         self.target_frame = self.get_parameter("target_frame").value
-        self.min_markers = int(self.get_parameter("min_markers").value)
+        self.min_markers = self._resolve_min_markers()
         self.max_reproj = float(self.get_parameter("max_reproj_px").value)
         self.min_distance = float(self.get_parameter("min_distance_m").value)
         self.max_distance = float(self.get_parameter("max_distance_m").value)
@@ -258,6 +258,29 @@ class MarkerLocator(Node):
         self._describe_startup()
 
     # -- setup -------------------------------------------------------------
+
+    def _resolve_min_markers(self):
+        """How many markers must decode before the pose is published.
+
+        An explicit positive `min_markers` wins. Zero (the default) follows
+        `config/board.yaml`, which is what a deployment that swaps between a
+        3x3 calibration board and a single marker on the elevator needs: the
+        shape is already described in that file, and a leftover constant from
+        the other shape fails in a disguise. Six with a single marker prints
+        `no board (need 6 markers)` forever, which reads exactly like a camera
+        that cannot see anything -- the one diagnosis you would have ruled out
+        first, and the wrong one.
+        """
+        configured = int(self.get_parameter("min_markers").value)
+        if configured > 0:
+            return configured
+        derived = self.spec.auto_min_markers
+        total = self.spec.markers_x * self.spec.markers_y
+        self.get_logger().info(
+            f"min_markers not set, following board.yaml: "
+            f"{self.spec.markers_x}x{self.spec.markers_y} board, "
+            f"need >= {derived} of {total} markers")
+        return derived
 
     def _load_intrinsics(self):
         path = self.get_parameter("camera_info").value

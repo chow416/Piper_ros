@@ -10,9 +10,16 @@ The pose comes from `config/home_pose.yaml`. Values are validated against the
 arm protocol limits before anything is sent, and warnings are printed for values
 that fall outside the recommended range.
 
-    ros2 run piper_elevator_manipulation go_home --dry-run
-    ros2 run piper_elevator_manipulation go_home
-    ros2 run piper_elevator_manipulation go_home --duration 12
+    ros2 run piper_elevator_manipulation go_home.py --dry-run
+    ros2 run piper_elevator_manipulation go_home.py
+    ros2 run piper_elevator_manipulation go_home.py --duration 12
+
+⚠️ The executable keeps its `.py` suffix: it is installed with
+`install(PROGRAMS scripts/go_home.py ...)`, and that keeps the file name.
+`ros2 run piper_elevator_manipulation go_home` fails with "No executable
+found", which reads like a broken build rather than a missing suffix -- this
+was hit while writing the file and cost a detour into CMake and the
+install() modes, both of which were fine.
 """
 
 from __future__ import annotations

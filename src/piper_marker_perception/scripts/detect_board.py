@@ -61,9 +61,10 @@ def main():
                              "CameraInfo file")
     parser.add_argument("--out", default="",
                         help="directory for annotated debug images")
-    parser.add_argument("--min-markers", type=int, default=4,
-                        help="fewer than this and the pose is not reported "
-                             "(default 4)")
+    parser.add_argument("--min-markers", type=int, default=0,
+                        help="fewer than this and the pose is not reported. "
+                             "0 (the default) derives the gate from the board "
+                             "in --config")
     parser.add_argument("--ransac", action="store_true",
                         help="use solvePnPRansac; slower, tolerant of a stray "
                              "bad corner")
@@ -75,10 +76,16 @@ def main():
     spec = BoardSpec.from_yaml(resolve_config_path(args.config))
     intrinsics = CameraIntrinsics.from_file_or_directory(args.camera_info)
 
+    # 0 means "let the board decide", so that swapping between a 3x3
+    # calibration board and a single marker does not also mean remembering a
+    # number over here. A stale gate is quiet: it rejects everything, and every
+    # rejection looks like a bad image.
+    min_markers = args.min_markers or spec.auto_min_markers
+
     if not args.quiet:
         print(f"板子     {spec}")
         print(f"内参     {intrinsics}")
-        print(f"判定门   marker >= {args.min_markers}")
+        print(f"判定门   marker >= {min_markers}")
         print()
 
     images = gather_images(args.images)
@@ -101,11 +108,11 @@ def main():
 
         result = detect(image, intrinsics.camera_matrix, intrinsics.dist_coeffs,
                         spec, detector=detector, use_ransac=args.ransac,
-                        min_markers=args.min_markers)
+                        min_markers=min_markers)
 
         name = os.path.basename(path)
         if result is None:
-            print(f"  {name:32s} 未解出（marker 不足 {args.min_markers} 或没找到）")
+            print(f"  {name:32s} 未解出（marker 不足 {min_markers} 或没找到）")
             results.append({"image": name, "solved": False})
             continue
 

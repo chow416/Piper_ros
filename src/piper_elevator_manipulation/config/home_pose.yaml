@@ -16,7 +16,7 @@
 # on the real arm, the five-dimensional IK was 4 mm to 11 mm short of the target
 # from such a pose, and succeeded as soon as the joints were moved off the stops.
 #
-# Run `go_home` once after enabling the motors so every task starts from a pose
+# Run `go_home.py` once after enabling the motors so every task starts from a pose
 # that is deliberately well away from the stops.
 #
 # ---------------------------------------------------------------------------
@@ -40,7 +40,7 @@
 # degree margin above is what the arm wants. That is deliberate, not an
 # oversight: this is the pose the wrist camera has the calibration board framed
 # from, and lifting joint2 by even 15 degrees swings the camera off it, which
-# leaves nothing for `marker_locator` to find. `go_home` therefore warns about
+# leaves nothing for `marker_locator` to find. `go_home.py` therefore warns about
 # this file on every run. The warning is doing its job — it is the reminder that
 # a 15 degree lift would be better if the board can be framed from somewhere
 # else.
@@ -51,7 +51,7 @@
 # joint6 is not part of the five-axis press configuration. The driver holds it at
 # its measured angle, so there is no home entry for it.
 #
-# The recommended ranges are advisory: `go_home` refuses values outside the
+# The recommended ranges are advisory: `go_home.py` refuses values outside the
 # protocol limits and warns when a value falls outside the recommended range.
 #
 # ---------------------------------------------------------------------------
@@ -63,9 +63,37 @@
 
 # Recorded from the real arm, in the pose the wrist camera frames the board
 # from — see the joint2 note above. Radians, matching the rest of this package.
+#
+# joint5 follows the board, and it has been moved three times on 2026-09-30 --
+# always from a measurement of where the board actually lands in the image,
+# never by eye. Figures are in the camera's optical frame; the half field of
+# view is 33.9 x 26.7 deg.
+#
+#   0.6602   board centre 19.93 deg *below* the axis; the bottom row of
+#            markers was clipping the frame edge and `marker_locator` kept
+#            reporting `no board (need 6 markers)`
+#   0.9081   board centred -- worst corner 1.41 deg from the axis against a
+#            26.7 deg limit. Detection went to a steady 5.005 Hz and the pose
+#            jitter dropped to 0.07/0.34/0.53 mm peak to peak.
+#   0.5091   board had moved again. Only IDs 6, 7, 8 decoded, at 30 px from the
+#            *top* edge, which puts the centre about 28.6 deg *above* the axis.
+#            The wrist is raised to follow it.
+#
+# The lesson from doing this three times: this number is not a property of the
+# robot, it is a property of where the board happens to be standing. Re-measure
+# after any move. Note also that the view rotates about 1.25 times as fast as
+# joint5 turns -- the camera does not just spin on the wrist axis, it also
+# translates, so the two are not 1:1 in practice even though the pitch is.
+#
+# joint5 is the right knob and joint2 is not. joint2 sits 0.0105 rad from a
+# stop whose limit is >= 0, so its only free direction is *up*, and up swings
+# the camera *away* from the board.
+#
+# ⚠️ Home is also the seed the press plans from. If the press starts failing 5D
+# IK from 'captured start state', this is the first thing to revisit.
 home_pose:
   joint1:  0.0000   #   0.00 deg   recommended [-135.0, +135.0]
   joint2:  0.0105   #   0.60 deg   recommended [  15.0, +165.0]  ⚠️ 低于下限
   joint3: -0.4215   # -24.15 deg   recommended [-155.0,  -15.0]
   joint4:  0.0000   #   0.00 deg   recommended [ -85.0,  +85.0]
-  joint5:  0.6602   #  37.83 deg   recommended [ -55.0,  +55.0]
+  joint5:  0.5091   #  29.17 deg   recommended [ -55.0,  +55.0]  ← 对准标定板
