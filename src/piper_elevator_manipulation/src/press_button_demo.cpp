@@ -1213,9 +1213,14 @@ int main(int argc, char** argv) {
                   params_source.c_str(), summary);
     }
     // The file wins over the launch arguments, because "one knob" is the whole
-    // point of it. But winning silently would mean `--standoff 0.02` doing
-    // nothing with no explanation, which is the worse failure of the two. So say
-    // it, once.
+    // point of it. But winning silently would mean `contact_standoff_m:=0.02` on
+    // the launch line doing nothing with no explanation, which is the worse
+    // failure of the two. So say it, once.
+    //
+    // This is only reachable by launching the node directly now: the
+    // `--standoff` / `--depth` flags that used to be the way in are refused
+    // outright by tools/press_board.sh, precisely because of the failure this
+    // warning describes.
     if (!overlap_warned && params_source != "ROS parameters" &&
         (std::abs(approach - approach_distance) > 1e-9 ||
          std::abs(standoff - contact_standoff) > 1e-9 ||
