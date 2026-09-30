@@ -54,10 +54,8 @@ struct PressTaskParameters {
   Eigen::Vector3d target_position;
   Eigen::Vector3d press_direction;
   double approach_distance;
-  //: How far short of `target_position` the approach stops. The press phase
-  //: then covers this plus `press_depth`, so the rod still ends up
-  //: `press_depth` past the aim point -- the standoff moves where the approach
-  //: *stops*, not where the press *ends*.
+  //: How far short of `target_position` the approach stops -- which is also
+  //: where the press phase starts.
   //:
   //: It exists because the aim point is only as good as the calibration behind
   //: it, and anything that puts it inside the real surface turns an approach
@@ -65,6 +63,16 @@ struct PressTaskParameters {
   //: instead, and that gap is something an operator can put a shim into and
   //: measure.
   double contact_standoff;
+  //: How much further to push from where the approach stopped. The press phase
+  //: travels exactly this, so this is the real penetration.
+  //:
+  //: It is measured from the *contact waypoint*, not from `target_position`.
+  //: That matters: measured from the target, the standoff would move where the
+  //: press starts but not where it ends, so tuning the standoff could not stop
+  //: the rod from driving past an aim point that sits inside the real surface.
+  //: Anchored to the contact waypoint, the standoff shifts the whole press --
+  //: approach end and press end together -- and `press_depth` keeps meaning
+  //: "how deep I push", independent of how wrong the calibration is.
   double press_depth;
 };
 
@@ -414,8 +422,15 @@ PlanningTask createTask(
   // error from being spent on the target instead of on a gap.
   const Eigen::Vector3d contact_position =
       parameters.target_position - parameters.contact_standoff * direction;
+  // The press starts where the approach stopped and pushes `press_depth` further.
+  // Measured from the contact waypoint rather than from the aim point on
+  // purpose: the standoff is what absorbs a calibration error, so changing it
+  // has to move the end of the press too. Measured from the aim point, the
+  // standoff would move only the start, and the rod would drive to the same
+  // place no matter how large the standoff got -- which is exactly the trap
+  // this avoids.
   const Eigen::Vector3d pressed_position =
-      parameters.target_position + parameters.press_depth * direction;
+      contact_position + parameters.press_depth * direction;
 
   // The free-motion route is loaded before solving IK because its final waypoint
   // is the pose the arm actually holds when the approach begins.
@@ -673,10 +688,12 @@ int executePressSequence(
   const double travel_margin = require_contact
       ? 0.0
       : getOrDeclareParameter(node, "hardware_travel_margin_m", 0.003);
-  // The press phase starts at the standoff, so the travel it has to cover is
-  // the standoff plus the intended penetration.
-  const double travel_cap =
-      parameters.contact_standoff + parameters.press_depth + travel_margin;
+  // The press phase starts where the approach stopped and travels exactly
+  // `press_depth`, so the cap sits just above that. (It used to be
+  // standoff + depth: back then the press ran from the standoff all the way to
+  // `target + depth`, which is also why this line's "planned travel" used to
+  // disagree with the motion it was describing.)
+  const double travel_cap = parameters.press_depth + travel_margin;
   RCLCPP_INFO(node->get_logger(),
               "Executing %s press (planned travel %.4f m, safety cap %.4f m)",
               require_contact ? "contact-limited" : "fixed-travel",
