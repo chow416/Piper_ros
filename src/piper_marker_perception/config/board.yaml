@@ -19,27 +19,34 @@
 board:
   dictionary: DICT_4X4_50
 
-  #: 板子是 markers_x × markers_y 个 marker 的栅格
-  markers_x: 3
-  markers_y: 3
+  #: ★ 当前形态：**单个** marker 贴在电梯按键旁边的固定位置，所以是 1×1。
+  #:   （标定板那套 3×3 已经换下了；要做相机/手眼标定时再改回 3 / 3，
+  #:    同时把下面 marker_length / marker_separation / accepted_ids 一起改回去。）
+  #:
+  #:   ⚠️ 1×1 时**板系原点 = 这个 marker 的中心**（已实测：marker_centre(0,0)
+  #:      = [0,0,0]），+X 右、+Y 上、+Z 朝你。
+  #:      所以下面 targets 里的 tip_in_board 就是"按键中心相对 marker 中心"。
+  markers_x: 1
+  markers_y: 1
 
   #: 单个 marker 的边长（含黑色边框），米。★ 实测
-  #: 这是打印机缩到 ~95% 打出来的那张。钢尺实测 marker 28.5 mm、
-  #: 间隔 9.5 mm，验算外圈宽 = 3×28.5 + 2×9.5 = 104.5 mm，
-  #: 与另一次独立量到的 105 mm 一致。
+  #: 量**黑边的外沿**，不是里面白色方块的边长 —— 差一圈边框就是几个百分点。
   #: ⚠️ 这个值只影响解出来的**距离**：填大了，报的距离就偏远。
-  #:    验证方法：量一下相机到板子的实际距离，对不上就是这里填错了。
+  #:    验证方法：量一下相机到 marker 的实际距离，对不上就是这里填错了。
   marker_length: 0.0285
 
-  #: 相邻两个 marker 之间的**空隙**，不是中心距，米。★ 实测
-  #: 中心距 = marker_length + marker_separation = 38 mm
-  marker_separation: 0.0095
+  #: 相邻 marker 的空隙，米。1×1 用不到，保持 0。
+  marker_separation: 0.0
 
-  #: 栅格左上角那个 marker 的 ID，其余按 从左到右、从上到下 递增
-  first_marker_id: 0
+  #: ★★ 这个 marker 的 ID，**必须和实物一致**。
+  #:    写错了不是"稍微偏"，是**直接找不到** —— 检测器是按 ID 过滤的，
+  #:    日志只会出现 `not publishing: no board (need 1 markers)`，
+  #:    读起来像相机没拍到，实际是拍到了、ID 对不上。
+  #:    不知道 ID：跑 tools/find_marker_id.py，它直接打印相机里看到的 ID。
+  first_marker_id: 4        # ← 实测（tools/find_marker_id.py 从相机读出来）
 
-  #: 只认这些 ID。场景里出现别的 marker（或恰好长得像的图案）一律忽略。
-  accepted_ids: [0, 1, 2, 3, 4, 5, 6, 7, 8]
+  #: 只认这些 ID。只贴一个码就只写这一个 —— 白名单窄一点，误检就少一点。
+  accepted_ids: [4]         # ← 同上
 
 # ⚠️ 上面这段描述的是**标定用的 3×3 板**。
 #    如果部署时改用**一个小 marker** 贴在电梯按键旁边，下面几处必须一起改 ——
@@ -139,7 +146,7 @@ targets:
     taught: true             # ← 量完改成 true
     # ⚠️ 三个分量都是**米**。毫米量的先 ÷1000。
     #    例：按键在板心上方 80 mm、右侧 35 mm → {x: 0.035, y: 0.080, z: 0.000}
-    tip_in_board: {x: 0.000, y: 0.097, z: 0.000}     # 零 = 板心，不是按键
+    tip_in_board: {x: 0.000, y: -0.097, z: 0.000}     # 零 = 板心，不是按键
     press_axis_in_board: {x: 0.0, y: 0.0, z: -1.0}   # 单位向量，无单位
 
   # 需要多个按键就照抄一段改名，例如：
