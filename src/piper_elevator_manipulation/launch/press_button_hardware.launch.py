@@ -17,6 +17,13 @@ Differences from the simulation profile:
     flags, because reading a target from launch arguments and moving real
     hardware should never be one careless flag apart.
 
+The numbers being tuned -- `contact_standoff_m`, `press_depth`,
+`approach_distance` and both gates -- live in `config/press_params.yaml`, which
+the node **re-reads before every press**. Edit that file rather than passing the
+launch arguments below: it wins when present, and an edit takes effect on the
+next press with no restart and no rebuild. The launch arguments remain as the
+fallback for when the file is turned off with `press_params_file:=''`.
+
 Note that the planning scene is empty on hardware: the real table and panel are
 not in it unless a sensor or a collision object puts them there. Verify the
 approach path is clear before enabling.
@@ -28,10 +35,12 @@ Start with the defaults, which plan and print without moving anything:
 Then, with the arm enabled by piper_hardware and the workspace clear:
 
     ros2 launch piper_elevator_manipulation press_button_hardware.launch.py \\
-      execute:=true hardware_enable:=true \\
+      target_source:=topic max_presses:=0 \\
       button_x:=0.30 button_y:=0.00 button_z:=0.24 \\
-      press_direction_x:=1.0 press_direction_y:=0.0 press_direction_z:=0.0 \\
-      approach_distance:=0.030 contact_standoff_m:=0.005 press_depth:=0.003
+      press_direction_x:=1.0 press_direction_y:=0.0 press_direction_z:=0.0
+
+with the standoff, the depth and the two enable gates set in
+`config/press_params.yaml` instead of on this command line.
 """
 
 import os
@@ -69,6 +78,7 @@ def generate_launch_description():
     start_moveit = LaunchConfiguration("start_moveit")
     rviz = LaunchConfiguration("rviz")
     free_route_file = LaunchConfiguration("free_route_file")
+    press_params_file = LaunchConfiguration("press_params_file")
 
     moveit_launch = os.path.join(
         get_package_share_directory("piper_press_moveit"),
@@ -113,6 +123,7 @@ def generate_launch_description():
                 "contact_standoff_m": contact_standoff,
                 "press_depth": press_depth,
                 "hardware_travel_margin_m": travel_margin,
+                "press_params_file": press_params_file,
             },
         ],
     )
@@ -224,6 +235,25 @@ def generate_launch_description():
                 "free_motion_route.yaml",
             ),
             description="YAML file of prerecorded free-motion joint waypoints.",
+        ),
+        # The one file an operator edits. Its values are re-read before every
+        # press, so an edit lands on the next press with no restart and no
+        # rebuild -- which is what makes repeated standoff tuning bearable.
+        # Pass an empty string to go back to driving these from the launch
+        # arguments above.
+        DeclareLaunchArgument(
+            "press_params_file",
+            default_value=os.path.join(
+                get_package_share_directory("piper_elevator_manipulation"),
+                "config",
+                "press_params.yaml",
+            ),
+            description=(
+                "YAML file of press parameters (contact_standoff_m, press_depth, "
+                "approach_distance, execute, hardware_enable), re-read before "
+                "every press. Empty string disables it and falls back to the "
+                "launch arguments."
+            ),
         ),
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(moveit_launch),

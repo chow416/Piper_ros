@@ -7,6 +7,7 @@
 #include "piper_elevator_manipulation/trajectory_executor.hpp"
 
 #include <Eigen/Core>
+#include <yaml-cpp/yaml.h>
 #include <moveit/task_constructor/solvers/joint_interpolation.h>
 #include <moveit/task_constructor/solvers/pipeline_planner.h>
 #include <moveit/task_constructor/stages/current_state.h>
@@ -24,6 +25,8 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
+#include <cstdio>
+#include <fstream>
 #include <limits>
 #include <map>
 #include <memory>
@@ -770,6 +773,76 @@ int executePressSequence(
 namespace {
 
 // Settings that describe how to run a press, as opposed to what to press.
+// ------------------------------------------------------- 可编辑的按压参数文件
+// An operator changes these by editing one file, instead of passing launch
+// arguments that need the whole service restarted.
+//
+// Why a file and not `ros2 param set`: these numbers belong next to each other,
+// with their allowed ranges written down beside them, and they should survive a
+// restart. A one-off param set does neither.
+//
+// It is re-read before every press, so an edit takes effect on the next press.
+// That matters here because the standoff is the one value that gets tuned by
+// repeated trial -- every restart costs a planning-scene handshake and a route,
+// which is exactly the kind of friction that stops people from tuning at all.
+//
+// ⚠️ Deliberately NOT in this file: `execute` and `hardware_enable`. Those two
+// gates have to be typed on the command line for every session. A saved `true`
+// in a file that outlives the session is exactly the "one careless flag apart"
+// that this launch profile is built to avoid.
+struct EditablePressParams {
+  double approach_distance{0.030};
+  double contact_standoff{0.005};
+  double press_depth{0.004};
+};
+
+// Reads the editable file. Returns false -- and says why -- when it is absent or
+// unusable. The caller then falls back to the ROS parameters, which is exactly
+// the behaviour that existed before this file did: a broken file degrades to
+// "same as yesterday", not to "refuses to press".
+bool readPressParamsFile(const rclcpp::Node::SharedPtr& node,
+                         const std::string& path,
+                         EditablePressParams* out) {
+  std::ifstream stream(path);
+  if (!stream) {
+    return false;  // absent is normal when launch pointed us at nothing
+  }
+
+  const auto number = [&](const YAML::Node& root, const char* key,
+                          double fallback) {
+    const YAML::Node value = root[key];
+    if (!value) {
+      return fallback;
+    }
+    try {
+      return value.as<double>();
+    } catch (const YAML::Exception& exception) {
+      RCLCPP_ERROR(node->get_logger(), "%s: %s: %s", path.c_str(), key,
+                   exception.what());
+      return fallback;
+    }
+  };
+  try {
+    const YAML::Node root = YAML::Load(stream);
+    if (!root.IsMap()) {
+      RCLCPP_ERROR(node->get_logger(),
+                   "%s: top level must be a mapping of parameter names to "
+                   "values",
+                   path.c_str());
+      return false;
+    }
+    out->approach_distance =
+        number(root, "approach_distance", out->approach_distance);
+    out->contact_standoff =
+        number(root, "contact_standoff_m", out->contact_standoff);
+    out->press_depth = number(root, "press_depth", out->press_depth);
+  } catch (const YAML::Exception& exception) {
+    RCLCPP_ERROR(node->get_logger(), "%s: %s", path.c_str(), exception.what());
+    return false;
+  }
+  return true;
+}
+
 struct RunSettings {
   bool execute{false};
   std::string execution_mode{"simulation"};
@@ -1042,6 +1115,13 @@ int main(int argc, char** argv) {
       getOrDeclareParameter(node, "contact_standoff_m", 0.005);
   const double press_depth = getOrDeclareParameter(node, "press_depth", 0.004);
 
+  // Optional operator-editable file. Empty means "use the ROS parameters", which
+  // is what every launch except press_button_hardware keeps doing; that one
+  // points it at config/press_params.yaml, where the numbers sit next to the
+  // ranges they have to satisfy.
+  const std::string press_params_file =
+      getOrDeclareParameter(node, "press_params_file", std::string(""));
+
   std::unique_ptr<piper_elevator_manipulation::TargetSource> target_channel;
   try {
     if (targets_from_topic) {
@@ -1079,7 +1159,58 @@ int main(int argc, char** argv) {
 
   int exit_code = 0;
   int64_t press_count = 0;
+  std::string reported_params;
+  bool overlap_warned = false;
   while (rclcpp::ok() && (max_presses == 0 || press_count < max_presses)) {
+    // Re-read the editable file every press so an edit lands on the next one
+    // without restarting the service. The ROS parameters stay as the fallback,
+    // so a missing or broken file behaves exactly as it did before the file
+    // existed.
+    double approach = approach_distance;
+    double standoff = contact_standoff;
+    double depth = press_depth;
+    std::string params_source = "ROS parameters";
+    if (!press_params_file.empty()) {
+      EditablePressParams edited;
+      edited.approach_distance = approach_distance;
+      edited.contact_standoff = contact_standoff;
+      edited.press_depth = press_depth;
+      if (readPressParamsFile(node, press_params_file, &edited)) {
+        approach = edited.approach_distance;
+        standoff = edited.contact_standoff;
+        depth = edited.press_depth;
+        params_source = press_params_file;
+      }
+    }
+    // Say what will be used, but only when it changes. An operator editing the
+    // file wants to see the new values land; a line per press would just be
+    // noise, and this log is read while watching the arm.
+    char summary[256];
+    std::snprintf(summary, sizeof(summary),
+                  "approach %.1f mm, contact standoff %.1f mm, press depth "
+                  "%.1f mm",
+                  approach * 1000.0, standoff * 1000.0, depth * 1000.0);
+    if (summary != reported_params) {
+      reported_params = summary;
+      RCLCPP_INFO(logger, "Press parameters (from %s): %s",
+                  params_source.c_str(), summary);
+    }
+    // The file wins over the launch arguments, because "one knob" is the whole
+    // point of it. But winning silently would mean `--standoff 0.02` doing
+    // nothing with no explanation, which is the worse failure of the two. So say
+    // it, once.
+    if (!overlap_warned && params_source != "ROS parameters" &&
+        (std::abs(approach - approach_distance) > 1e-9 ||
+         std::abs(standoff - contact_standoff) > 1e-9 ||
+         std::abs(depth - press_depth) > 1e-9)) {
+      overlap_warned = true;
+      RCLCPP_WARN(logger,
+                  "%s overrides the launch arguments for this press. Move the "
+                  "file away, or pass press_params_file:='', if you meant to "
+                  "drive these from the command line.",
+                  press_params_file.c_str());
+    }
+
     PressTaskParameters parameters;
     if (targets_from_topic) {
       // Drop anything that arrived while the arm was moving. A target observed
@@ -1095,9 +1226,9 @@ int main(int argc, char** argv) {
       }
       parameters.target_position = target->position;
       parameters.press_direction = target->press_direction;
-      parameters.approach_distance = approach_distance;
-      parameters.contact_standoff = contact_standoff;
-      parameters.press_depth = press_depth;
+      parameters.approach_distance = approach;
+      parameters.contact_standoff = standoff;
+      parameters.press_depth = depth;
     } else {
       parameters =
           PressTaskParameters{
@@ -1109,7 +1240,7 @@ int main(int argc, char** argv) {
                   getOrDeclareParameter(node, "press_direction_x", 1.0),
                   getOrDeclareParameter(node, "press_direction_y", 0.0),
                   getOrDeclareParameter(node, "press_direction_z", 0.0)),
-              approach_distance, contact_standoff, press_depth};
+              approach, standoff, depth};
     }
 
     if (!validatePressParameters(node, parameters)) {

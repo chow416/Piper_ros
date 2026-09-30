@@ -17,6 +17,7 @@ find_package(rclcpp_action REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(tf2_eigen REQUIRED)
+find_package(yaml_cpp_vendor REQUIRED)
 
 add_executable(press_button_demo
   src/cartesian_line_planner.cpp
@@ -41,6 +42,7 @@ ament_target_dependencies(press_button_demo
   sensor_msgs
   std_msgs
   tf2_eigen
+  yaml_cpp_vendor
 )
 
 add_executable(virtual_contact_sim src/virtual_contact_sim.cpp)
