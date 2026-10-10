@@ -231,8 +231,10 @@ def read(path):
 def main():
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--before", default="HEAD",
-                        help="git ref holding the pre-move version (default: HEAD)")
+    parser.add_argument("--before", default="067d404",
+                        help="git ref holding the pre-move version. Defaults to "
+                             "the last commit before the split began; HEAD would "
+                             "move as the split's own commits land.")
     parser.add_argument("--before-path", default=DEFAULT_BEFORE,
                         help="repo-relative path of the pre-move file")
     parser.add_argument("--symbols", default=DEFAULT_SYMBOLS,

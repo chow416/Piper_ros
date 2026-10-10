@@ -135,7 +135,7 @@ cd /ws && colcon build --symlink-install --packages-select piper_elevator_manipu
 3. **规范化行首缩进后逐行对比**
 
 ```
-$ python3 scripts/verify_pure_move.py --before HEAD
+$ python3 scripts/verify_pure_move.py --before 067d404
 collectMotions              IDENTICAL   (press_solution.cpp)
 createTask                  IDENTICAL   (press_task_builder.cpp)
 solveWaypoint               IDENTICAL   (press_task_builder.cpp)
@@ -155,6 +155,14 @@ main                        IDENTICAL   (press_button_demo.cpp)
 包括永远跑不到的分支。
 
 **B 的前提**：不许重排换行（Global Constraint 10）。
+
+**⚠️ 基线必须是固定 ref，不能写 `HEAD`。** HEAD 会随着每个任务提交前移，
+Task 2 之后它已经不含那些被搬走的符号，脚本会把它们报成 `NOT-IN-BEFORE`。
+本次拆分前最后一个是 **`067d404`**：
+
+```bash
+git log --oneline 067d404..HEAD     # 应该只列出本次拆分的几个提交
+```
 
 ### C — 可选，收尾时跑
 
@@ -236,9 +244,9 @@ RunSettings
 
 ```bash
 cd /ws/src/Piper_ros/src/piper_elevator_manipulation
-# 把 HEAD 版本落到临时目录，当作"当前文件"来验脚本本身
-git show HEAD:src/piper_elevator_manipulation/src/press_button_demo.cpp > /tmp/before.cpp
-python3 scripts/verify_pure_move.py --before HEAD --symbols docs/press_button_demo_split_symbols.txt \
+# 把基线版本落到临时目录，当作"当前文件"来验脚本本身
+git show 067d404:src/piper_elevator_manipulation/src/press_button_demo.cpp > /tmp/before.cpp
+python3 scripts/verify_pure_move.py --before 067d404 --symbols docs/press_button_demo_split_symbols.txt \
   --only /tmp/before.cpp
 ```
 预期：`27 identical, 0 different, 0 missing`，退出码 0。
@@ -256,7 +264,7 @@ grep -nE '^[A-Za-z_].*=' src/press_button_demo.cpp | grep -vE 'constexpr|using |
 - [ ] **Step 1.5：对当前代码跑一次基线检查**
 
 ```bash
-python3 scripts/verify_pure_move.py --before HEAD --symbols docs/press_button_demo_split_symbols.txt
+python3 scripts/verify_pure_move.py --before 067d404 --symbols docs/press_button_demo_split_symbols.txt
 ```
 预期：`27 identical, 0 different, 0 missing`。
 
@@ -353,7 +361,7 @@ cd /ws && colcon build --symlink-install --packages-select piper_elevator_manipu
 
 ```bash
 cd /ws/src/Piper_ros/src/piper_elevator_manipulation
-python3 scripts/verify_pure_move.py --before HEAD --symbols docs/press_button_demo_split_symbols.txt
+python3 scripts/verify_pure_move.py --before 067d404 --symbols docs/press_button_demo_split_symbols.txt
 ```
 预期：27 个符号**全部 `IDENTICAL`**（搬走的在别处找到，没搬的还在 `.cpp` 里）。
 **任何 `DIFFERENT` / `MISSING` → 停下定位，不要提交。**
@@ -435,7 +443,7 @@ cd /ws && colcon build --symlink-install --packages-select piper_elevator_manipu
 
 ```bash
 cd /ws/src/Piper_ros/src/piper_elevator_manipulation
-python3 scripts/verify_pure_move.py --before HEAD --symbols docs/press_button_demo_split_symbols.txt
+python3 scripts/verify_pure_move.py --before 067d404 --symbols docs/press_button_demo_split_symbols.txt
 ```
 预期：**27 个符号全部 `IDENTICAL`**，其中约 15 个现在应报告位置在新模块里。
 
@@ -513,7 +521,7 @@ cd /ws && rm -rf build/piper_elevator_manipulation install/piper_elevator_manipu
 
 ```bash
 cd /ws/src/Piper_ros/src/piper_elevator_manipulation
-python3 scripts/verify_pure_move.py --before HEAD --symbols docs/press_button_demo_split_symbols.txt
+python3 scripts/verify_pure_move.py --before 067d404 --symbols docs/press_button_demo_split_symbols.txt
 ```
 预期：**`27 identical, 0 different, 0 missing`**，退出码 0。
 
