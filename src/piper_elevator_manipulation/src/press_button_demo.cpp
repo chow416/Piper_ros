@@ -2,6 +2,9 @@
 #include "piper_elevator_manipulation/cartesian_line_planner.hpp"
 #include "piper_elevator_manipulation/contact_monitor.hpp"
 #include "piper_elevator_manipulation/free_motion_route.hpp"
+#include "piper_elevator_manipulation/joint_state_cache.hpp"
+#include "piper_elevator_manipulation/press_constants.hpp"
+#include "piper_elevator_manipulation/press_solution.hpp"
 #include "piper_elevator_manipulation/press_travel_monitor.hpp"
 #include "piper_elevator_manipulation/target_source.hpp"
 #include "piper_elevator_manipulation/trajectory_executor.hpp"
@@ -42,13 +45,21 @@ namespace mtc = moveit::task_constructor;
 namespace stages = moveit::task_constructor::stages;
 namespace solvers = moveit::task_constructor::solvers;
 using piper_elevator_manipulation::FiveDofIkSolver;
+using piper_elevator_manipulation::JointStateCache;
+using piper_elevator_manipulation::PlannedMotion;
+using piper_elevator_manipulation::collectMotions;
+using piper_elevator_manipulation::kArmGroup;
+using piper_elevator_manipulation::kArmJoints;
+using piper_elevator_manipulation::kEndEffectorLink;
+using piper_elevator_manipulation::kPlanningFrame;
+using piper_elevator_manipulation::lastCommandedPositions;
+using piper_elevator_manipulation::logJointTracking;
+using piper_elevator_manipulation::motionTimeout;
+using piper_elevator_manipulation::plannedSeconds;
+using piper_elevator_manipulation::solutionUsesStage;
+using piper_elevator_manipulation::waitForSettledJoints;
 
 namespace {
-constexpr char kArmGroup[] = "arm";
-constexpr char kEndEffectorLink[] = "press_tcp";
-constexpr char kPlanningFrame[] = "world";
-constexpr std::array<const char*, 5> kArmJoints{
-    "joint1", "joint2", "joint3", "joint4", "joint5"};
 
 struct PressTaskParameters {
   Eigen::Vector3d target_position;
@@ -82,62 +93,6 @@ struct PlanningTask {
   std::map<std::string, double> pre_press_joints;
   std::map<std::string, double> return_joints;
 };
-
-struct PlannedMotion {
-  std::string stage_name;
-  trajectory_msgs::msg::JointTrajectory trajectory;
-};
-
-void collectMotions(const mtc::SolutionBase& solution,
-                    std::vector<PlannedMotion>* motions) {
-  if (const auto* sequence = dynamic_cast<const mtc::SolutionSequence*>(&solution)) {
-    for (const auto* part : sequence->solutions()) {
-      collectMotions(*part, motions);
-    }
-    return;
-  }
-  if (const auto* wrapped = dynamic_cast<const mtc::WrappedSolution*>(&solution)) {
-    collectMotions(*wrapped->wrapped(), motions);
-    return;
-  }
-  const auto* segment = dynamic_cast<const mtc::SubTrajectory*>(&solution);
-  if (segment == nullptr || segment->trajectory() == nullptr ||
-      segment->trajectory()->getWayPointCount() < 2 ||
-      solution.creator() == nullptr) {
-    return;
-  }
-  moveit_msgs::msg::RobotTrajectory message;
-  segment->trajectory()->getRobotTrajectoryMsg(
-      message, {kArmJoints[0], kArmJoints[1], kArmJoints[2],
-                kArmJoints[3], kArmJoints[4]});
-  motions->push_back({solution.creator()->name(), message.joint_trajectory});
-}
-
-std::chrono::milliseconds motionTimeout(
-    const trajectory_msgs::msg::JointTrajectory& trajectory) {
-  const double duration = rclcpp::Duration(
-      trajectory.points.back().time_from_start).seconds();
-  return std::chrono::milliseconds(static_cast<int64_t>(
-      std::max(5.0, duration * 3.0 + 5.0) * 1000.0));
-}
-
-bool solutionUsesStage(const mtc::SolutionBase& solution,
-                       const mtc::Stage* sought_stage) {
-  if (solution.creator() == sought_stage) {
-    return true;
-  }
-  if (const auto* sequence = dynamic_cast<const mtc::SolutionSequence*>(&solution)) {
-    for (const auto* segment : sequence->solutions()) {
-      if (solutionUsesStage(*segment, sought_stage)) {
-        return true;
-      }
-    }
-  }
-  if (const auto* wrapped = dynamic_cast<const mtc::WrappedSolution*>(&solution)) {
-    return solutionUsesStage(*wrapped->wrapped(), sought_stage);
-  }
-  return false;
-}
 
 template <typename T>
 T getOrDeclareParameter(const rclcpp::Node::SharedPtr& node,
@@ -178,17 +133,6 @@ double freeMotionScaling(const rclcpp::Node::SharedPtr& node,
   return value;
 }
 
-// Duration of a planned trajectory, used to report how long each phase is
-// expected to take. Worth logging separately from the wall-clock time, because
-// it is the number the speed scaling factors control and it can be read from a
-// dry run without moving the arm.
-double plannedSeconds(const trajectory_msgs::msg::JointTrajectory& trajectory) {
-  if (trajectory.points.empty()) {
-    return 0.0;
-  }
-  return rclcpp::Duration(trajectory.points.back().time_from_start).seconds();
-}
-
 Eigen::Vector3d vector3Parameter(const rclcpp::Node::SharedPtr& node,
                                  const std::string& name,
                                  const Eigen::Vector3d& default_value) {
@@ -208,179 +152,6 @@ std::chrono::milliseconds pressTimeout(const rclcpp::Node::SharedPtr& node) {
   }
   return std::chrono::milliseconds(
       static_cast<int64_t>(seconds * 1000.0));
-}
-
-// /joint_states arrives on the node's spin thread. Keeping the newest sample in
-// a cache lets start-state capture wait for data without installing a second
-// executor on a node that is already being spun, which is what allows the task
-// to run more than once in a process.
-class JointStateCache {
- public:
-  explicit JointStateCache(const rclcpp::Node::SharedPtr& node) : node_(node) {
-    subscription_ = node_->create_subscription<sensor_msgs::msg::JointState>(
-        "/joint_states", rclcpp::SensorDataQoS(),
-        [this](sensor_msgs::msg::JointState::ConstSharedPtr message) {
-          std::lock_guard<std::mutex> lock(mutex_);
-          latest_ = *message;
-          received_at_ = std::chrono::steady_clock::now();
-          condition_.notify_all();
-        });
-  }
-
-  // Returns joint1..joint5 from the newest feedback sample, waiting up to
-  // `timeout` for anything to arrive. A sample older than `max_age` is refused:
-  // a stopped publisher means the hardware interface has faulted, and planning
-  // from a frozen pose would command a jump.
-  std::optional<std::map<std::string, double>> waitForArmPositions(
-      std::chrono::seconds timeout,
-      std::chrono::milliseconds max_age = std::chrono::milliseconds(500)) {
-    std::unique_lock<std::mutex> lock(mutex_);
-    condition_.wait_for(lock, timeout, [this] { return latest_.has_value(); });
-    return extractLocked(max_age);
-  }
-
-  // Non-blocking version of the same read, used to watch the arm settle after a
-  // trajectory.
-  std::optional<std::map<std::string, double>> latestArmPositions(
-      std::chrono::milliseconds max_age = std::chrono::milliseconds(500)) const {
-    std::unique_lock<std::mutex> lock(mutex_);
-    return extractLocked(max_age);
-  }
-
- private:
-  std::optional<std::map<std::string, double>> extractLocked(
-      std::chrono::milliseconds max_age) const {
-    if (!latest_.has_value()) {
-      return std::nullopt;
-    }
-    const auto age = std::chrono::steady_clock::now() - received_at_;
-    if (age > max_age) {
-      RCLCPP_ERROR(node_->get_logger(),
-                   "Newest /joint_states sample is %.0f ms old; refusing to "
-                   "plan from a frozen pose.",
-                   std::chrono::duration<double, std::milli>(age).count());
-      return std::nullopt;
-    }
-
-    const sensor_msgs::msg::JointState& latest = *latest_;
-    std::map<std::string, double> all_positions;
-    for (std::size_t i = 0;
-         i < latest.name.size() && i < latest.position.size(); ++i) {
-      all_positions[latest.name[i]] = latest.position[i];
-    }
-
-    std::map<std::string, double> arm_positions;
-    for (const char* joint_name : kArmJoints) {
-      const auto found = all_positions.find(joint_name);
-      if (found == all_positions.end()) {
-        RCLCPP_ERROR(node_->get_logger(),
-                     "Joint state does not contain required joint '%s'.",
-                     joint_name);
-        return std::nullopt;
-      }
-      arm_positions[joint_name] = found->second;
-    }
-    return arm_positions;
-  }
-
-  rclcpp::Node::SharedPtr node_;
-  rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr subscription_;
-  mutable std::mutex mutex_;
-  std::condition_variable condition_;
-  std::optional<sensor_msgs::msg::JointState> latest_;
-  std::chrono::steady_clock::time_point received_at_{};
-};
-
-constexpr double kRadiansToDegrees = 57.29577951308232;
-
-// Compares where the arm actually is against the last point of a trajectory it
-// was just told to follow.
-//
-// This matters more than it looks. The trajectory action reports completion at
-// the controller's joint tolerance, which is not the same as the arm having
-// arrived: the joints can still be closing the gap when the next phase starts.
-// A blind sleep cannot tell "still catching up" from "this is as close as it
-// ever gets", and on a press only a few millimetres deep that difference is the
-// whole task. So wait until the error stops shrinking, then print the numbers.
-auto lastCommandedPositions(
-    const trajectory_msgs::msg::JointTrajectory& trajectory) {
-  std::map<std::string, double> commanded;
-  if (trajectory.points.empty()) {
-    return commanded;
-  }
-  const auto& final_point = trajectory.points.back();
-  for (std::size_t i = 0;
-       i < final_point.positions.size() && i < trajectory.joint_names.size();
-       ++i) {
-    commanded[trajectory.joint_names[i]] = final_point.positions[i];
-  }
-  return commanded;
-}
-
-void logJointTracking(const rclcpp::Logger& logger, const std::string& title,
-                      const std::map<std::string, double>& commanded,
-                      const std::map<std::string, double>& measured) {
-  if (commanded.empty() || measured.empty()) {
-    RCLCPP_WARN(logger, "No joint data to report for %s.", title.c_str());
-    return;
-  }
-  RCLCPP_INFO(logger, "Joint tracking at %s:", title.c_str());
-  double worst = 0.0;
-  std::string worst_joint;
-  for (const auto& [name, want] : commanded) {
-    const auto found = measured.find(name);
-    if (found == measured.end()) {
-      continue;
-    }
-    const double error = found->second - want;
-    if (std::abs(error) > worst) {
-      worst = std::abs(error);
-      worst_joint = name;
-    }
-    RCLCPP_INFO(logger, "  %-7s commanded %+8.3f deg  measured %+8.3f deg  "
-                        "lags by %+7.3f deg",
-                name.c_str(), want * kRadiansToDegrees,
-                found->second * kRadiansToDegrees, error * kRadiansToDegrees);
-  }
-  RCLCPP_INFO(logger, "  worst joint lag: %.3f deg on %s",
-              worst * kRadiansToDegrees, worst_joint.c_str());
-}
-
-// Waits for the joints to stop closing the gap, then reports. Bounded, so a
-// persistent offset (load deflection, for instance, which no amount of waiting
-// will fix) does not stall the task.
-void waitForSettledJoints(const rclcpp::Node::SharedPtr& node,
-                          JointStateCache& joint_states,
-                          const trajectory_msgs::msg::JointTrajectory& trajectory,
-                          const std::string& title) {
-  const auto commanded = lastCommandedPositions(trajectory);
-  std::map<std::string, double> measured;
-  double best = std::numeric_limits<double>::infinity();
-  int samples_without_progress = 0;
-  const auto deadline =
-      std::chrono::steady_clock::now() + std::chrono::seconds(5);
-  while (std::chrono::steady_clock::now() < deadline) {
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    const auto sample = joint_states.latestArmPositions();
-    if (!sample.has_value()) {
-      break;
-    }
-    measured = *sample;
-    double worst = 0.0;
-    for (const auto& [name, want] : commanded) {
-      const auto found = measured.find(name);
-      if (found != measured.end()) {
-        worst = std::max(worst, std::abs(found->second - want));
-      }
-    }
-    if (worst < best - 1.0e-4) {
-      best = worst;
-      samples_without_progress = 0;
-    } else if (++samples_without_progress >= 3) {
-      break;
-    }
-  }
-  logJointTracking(node->get_logger(), title, commanded, measured);
 }
 
 std::map<std::string, double> solveWaypoint(

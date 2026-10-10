@@ -24,6 +24,8 @@ add_executable(press_button_demo
   src/contact_monitor.cpp
   src/five_dof_ik.cpp
   src/free_motion_route.cpp
+  src/joint_state_cache.cpp
+  src/press_solution.cpp
   src/press_travel_monitor.cpp
   src/press_button_demo.cpp
   src/target_source.cpp
