@@ -27,6 +27,7 @@ add_executable(press_button_demo
   src/joint_state_cache.cpp
   src/press_executor.cpp
   src/press_parameters.cpp
+  src/press_runner.cpp
   src/press_solution.cpp
   src/press_task_builder.cpp
   src/press_travel_monitor.cpp
