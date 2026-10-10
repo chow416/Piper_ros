@@ -1,0 +1,38 @@
+# Symbols that press_button_demo.cpp's split must relocate without changing.
+#
+# One name per line. Blank lines and lines starting with '#' are ignored.
+# Prefix a name with '@type' for a class or struct definition; those match
+# 'class Name' / 'struct Name' instead of a function declarator.
+#
+# Consumed by scripts/verify_pure_move.py.
+
+# ── 21 functions ──────────────────────────────────────────────────────────
+collectMotions
+motionTimeout
+solutionUsesStage
+getOrDeclareParameter
+speedScaling
+freeMotionScaling
+plannedSeconds
+vector3Parameter
+pressTimeout
+lastCommandedPositions
+logJointTracking
+waitForSettledJoints
+solveWaypoint
+createTask
+createRecoveryTask
+executePressSequence
+readPressParamsFile
+validatePressParameters
+waitForTarget
+runSinglePress
+main
+
+# ── 6 types ───────────────────────────────────────────────────────────────
+@type PressTaskParameters
+@type PlanningTask
+@type PlannedMotion
+@type JointStateCache
+@type EditablePressParams
+@type RunSettings
