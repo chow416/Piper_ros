@@ -237,7 +237,9 @@ def render_a4_page(spec, dpi, margin_m=0.010):
     label_font = font(3.0)
 
     title = (f"ArUco 标定板  {spec.dictionary_name}  "
-             f"{spec.markers_x}×{spec.markers_y}")
+             f"{spec.markers_x}×{spec.markers_y}  "
+             f"ID {spec.first_marker_id}–"
+             f"{spec.first_marker_id + spec.markers_x * spec.markers_y - 1}")
     title_font.draw(draw, (int(mm(18)), int(mm(12))), title)
     body_font.draw(draw, (int(mm(18)), int(mm(21))),
                    f"标称 {spec.width * 1000:.1f} × {spec.height * 1000:.1f} mm    "
@@ -324,10 +326,11 @@ def render_a4_page(spec, dpi, margin_m=0.010):
         "  3. 量相邻两个 marker 之间的空隙，填回 marker_separation。",
         "",
         "贴到纸板上时注意：",
-        "  · 这一面朝相机，不要贴反。反了的话标记会被镜像，9 个 marker 里",
+        f"  · 这一面朝相机，不要贴反。反了的话标记会被镜像，"
+        f"{spec.markers_x * spec.markers_y} 个 marker 里",
         "    只会认出 1 个左右 —— 而且解出来的位姿看起来还是「正常」的。",
         "  · 纸面要平整，翘曲会让角点位置失真。",
-        "  · 左上角那个 marker 是 ID 0。",
+        f"  · 左上角那个 marker 是 ID {spec.first_marker_id}。",
         "",
         "板系（见上方三角标）：原点在板子几何中心，也就是中间那个 marker 的中心；",
         "  +X 向右，+Y 向上，+Z 垂直纸面朝外。贴好后这张纸的正面朝相机。",
