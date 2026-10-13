@@ -76,8 +76,9 @@ int main(int argc, char** argv) {
 
   const double approach_distance =
       getOrDeclareParameter(node, "approach_distance", 0.030);
-  // 5 mm by default. Enough that the approach visibly stops clear of the target
-  // on hardware, which is also what makes the gap measurable.
+  // The standoff is what makes the approach stop visibly clear of the target on
+  // hardware, which is also what makes the resulting gap measurable. The value
+  // in use, and the range it has to satisfy, live in config/press_params.yaml.
   const double contact_standoff =
       getOrDeclareParameter(node, "contact_standoff_m", 0.005);
   const double press_depth = getOrDeclareParameter(node, "press_depth", 0.004);
