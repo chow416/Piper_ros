@@ -76,6 +76,7 @@ def generate_launch_description():
     press_depth = LaunchConfiguration("press_depth")
     travel_margin = LaunchConfiguration("hardware_travel_margin_m")
     start_moveit = LaunchConfiguration("start_moveit")
+    scene_wait_s = LaunchConfiguration("scene_wait_s")
     rviz = LaunchConfiguration("rviz")
     free_route_file = LaunchConfiguration("free_route_file")
     press_params_file = LaunchConfiguration("press_params_file")
@@ -226,6 +227,26 @@ def generate_launch_description():
                 "for example when driving the same controller manager from RViz."
             ),
         ),
+        # How long to leave the press node waiting for move_group to come up.
+        #
+        # The node needs move_group's planning scene, but not at start-up: it
+        # only asks for it when a press is planned. So the number that matters
+        # is "how long after start-up does the first press arrive", not "how
+        # long does move_group take".
+        #
+        # 10 s suits the one-shot deployment (`max_presses=1` with the target
+        # coming from parameters), where the node presses the moment it starts.
+        # It is pure dead time when the target arrives on a topic: the operator
+        # has to aim first (several seconds of settling) and the waiter in
+        # tools/press_board.sh refuses to aim until move_group is alive anyway.
+        DeclareLaunchArgument(
+            "scene_wait_s", default_value="10.0",
+            description=(
+                "Seconds to delay the press node so move_group is up first. "
+                "Lower it when the target arrives on a topic (the node then "
+                "waits for one), not when the node must press immediately."
+            ),
+        ),
         DeclareLaunchArgument("rviz", default_value="true"),
         DeclareLaunchArgument(
             "free_route_file",
@@ -265,7 +286,9 @@ def generate_launch_description():
         ),
         # Planning itself runs in-process, but wait for move_group anyway so the
         # published solution can be inspected in RViz before anything moves.
-        TimerAction(period=10.0, actions=[demo_node],
+        # See `scene_wait_s`: this is a delay in *start-up order*, not a
+        # measurement of how long move_group takes.
+        TimerAction(period=scene_wait_s, actions=[demo_node],
                     condition=IfCondition(start_moveit)),
         TimerAction(period=1.0, actions=[demo_node],
                     condition=UnlessCondition(start_moveit)),
