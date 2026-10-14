@@ -9,7 +9,13 @@
 #include <moveit/task_constructor/stage.h>
 #include <moveit/task_constructor/task.h>
 
+#include <algorithm>
 #include <chrono>
+#include <cmath>
+#include <exception>
+#include <optional>
+#include <string>
+#include <utility>
 #include <vector>
 
 namespace piper_elevator_manipulation {
@@ -57,10 +63,80 @@ std::optional<piper_elevator_manipulation::PressTarget> waitForTarget(
   return std::nullopt;
 }
 
+namespace {
+
+//: The outcome of one look-again-then-correct attempt. Every failure is
+//: reported through `accepted` plus a reason instead of thrown: the refined
+//: observation is an improvement to the aim, so losing it has to cost accuracy,
+//: never the press.
+struct RefinementOutcome {
+  bool accepted{false};
+  Eigen::Vector3d position;
+  double correction_m{0.0};  // |refined - coarse|
+  double angle_deg{0.0};     // between the two normals
+  double applied_m{0.0};     // how far the fused target actually moves
+  std::string reason;
+};
+
+// One round: wait for a refined observation, check it, fuse it.
+RefinementOutcome refineOnce(const rclcpp::Node::SharedPtr& node,
+                             const PressTaskParameters& parameters,
+                             TargetSource& source,
+                             const RefinementParams& refinement, int round) {
+  RefinementOutcome outcome;
+  outcome.position = parameters.target_position;
+
+  RCLCPP_INFO(node->get_logger(),
+              "Refine round %d/%d: waiting up to %.1f s on '%s'...",
+              round + 1, refinement.rounds, refinement.wait_timeout_s,
+              source.topic().c_str());
+  const auto observation = source.waitForTarget(std::chrono::milliseconds(
+      static_cast<int64_t>(std::llround(refinement.wait_timeout_s * 1000.0))));
+  if (!observation.has_value()) {
+    outcome.reason = "no refined observation arrived in time";
+    return outcome;
+  }
+
+  outcome.correction_m =
+      (observation->position - parameters.target_position).norm();
+  // The normal is watched, never averaged. A single marker offers four coplanar
+  // corners and no plane to average over, so its normal can swing a long way --
+  // and once normalised, a wrong one looks exactly like a right one.
+  const double cosine = std::clamp(
+      parameters.press_direction.dot(observation->press_direction), -1.0, 1.0);
+  outcome.angle_deg = std::acos(cosine) * 180.0 / M_PI;
+
+  if (outcome.angle_deg > refinement.max_angle_deg) {
+    outcome.reason = "the refined normal disagrees by more than the angle gate";
+    return outcome;
+  }
+  if (outcome.correction_m > refinement.max_correction_m) {
+    outcome.reason =
+        "the refined position is further from the coarse one than the "
+        "correction gate allows";
+    return outcome;
+  }
+
+  // Position only, and deliberately not all of it. The two observations measure
+  // the same physical point with different errors, and the errors they share --
+  // intrinsics, hand-eye -- average out to nothing. A partial weight is the
+  // honest default while "the second one is better" is still unmeasured.
+  outcome.position =
+      (1.0 - refinement.fusion_weight) * parameters.target_position +
+      refinement.fusion_weight * observation->position;
+  outcome.applied_m = (outcome.position - parameters.target_position).norm();
+  outcome.accepted = true;
+  return outcome;
+}
+
+}  // namespace
+
 int runSinglePress(const rclcpp::Node::SharedPtr& node,
                    const RunSettings& settings,
                    const PressTaskParameters& parameters,
-                   JointStateCache& joint_states) {
+                   JointStateCache& joint_states,
+                   TargetSource* refine_source,
+                   const RefinementParams& refinement) {
   RCLCPP_INFO(node->get_logger(),
               "Waiting for the five-joint start state before planning...");
   const auto start_positions =
@@ -81,8 +157,12 @@ int runSinglePress(const rclcpp::Node::SharedPtr& node,
               parameters.press_depth);
 
   int exit_code = 0;
+  // The aim this press will actually use. Equal to the requested one until a
+  // refined observation moves it, which is why the code below reads this rather
+  // than `parameters`.
+  PressTaskParameters active = parameters;
   try {
-    auto planning_task = createTask(node, parameters, *start_positions);
+    auto planning_task = createTask(node, active, *start_positions);
     auto& task = planning_task.task;
     const auto result = task->plan(1);
     if (result != moveit::core::MoveItErrorCode::SUCCESS ||
@@ -129,7 +209,106 @@ int runSinglePress(const rclcpp::Node::SharedPtr& node,
                   "  planned total (motion only)           %5.2f s",
                   planned_total);
 
-      if (settings.execute) {
+      // ── the observation and the correction ───────────────────────────────
+      // Outside the `settings.execute` gate on purpose: the plumbing is what a
+      // dry run exists to check, and a refined rebuild is as inspectable as the
+      // coarse one. With `rounds == 0` -- the regression baseline -- this whole
+      // block disappears and the run is exactly what it was before.
+      if (refine_source != nullptr && refinement.rounds > 0) {
+        if (settings.execute) {
+          exit_code = runToPrePress(node, planning_task, joint_states);
+        }
+        if (exit_code == 0) {
+          const auto outcome =
+              refineOnce(node, active, *refine_source, refinement, 0);
+          if (!outcome.accepted) {
+            RCLCPP_WARN(node->get_logger(),
+                        "Refine round 1/%d: keeping the coarse target (%s).",
+                        refinement.rounds, outcome.reason.c_str());
+          } else {
+            RCLCPP_INFO(node->get_logger(),
+                        "Refine round 1/%d: dP=%.1f mm, dtheta=%.2f deg, "
+                        "weight %.2f -> aim moves %.1f mm",
+                        refinement.rounds, outcome.correction_m * 1000.0,
+                        outcome.angle_deg, refinement.fusion_weight,
+                        outcome.applied_m * 1000.0);
+            PressTaskParameters refined = active;
+            refined.target_position = outcome.position;
+            // The build below has two ways to fail, and neither of them may end
+            // the press. The correction is a gain, not a dependency: if the
+            // refined aim cannot be turned into a task, the coarse one is still
+            // standing there and is still perfectly pressable. Stopping instead
+            // would leave the arm parked at the approach pose for no reason.
+            //
+            // It fails for two different reasons. `createTask` throws when the
+            // corrected waypoints have no IK at all -- which is a normal
+            // outcome rather than a fault, because a correction that moves the
+            // aim outwards can push it past what the arm can reach. Planning
+            // can also come back empty even though every waypoint solved.
+            const auto live = joint_states.latestArmPositions();
+            std::optional<PlanningTask> rebuilt;
+            try {
+              // No prerecorded route: the arm already stands at the old
+              // approach pose, so replaying a route recorded from elsewhere
+              // would drag it back to that route's start and forward again.
+              // The live pose is handed over as the IK seed for the same
+              // reason: dropping the route also drops its end pose, and the
+              // captured start state is then metres away from the target.
+              rebuilt.emplace(createTask(node, refined, *start_positions, false,
+                                         live ? &*live : nullptr));
+              if (rebuilt->task->plan(1) !=
+                      moveit::core::MoveItErrorCode::SUCCESS ||
+                  rebuilt->task->solutions().empty()) {
+                RCLCPP_ERROR(node->get_logger(),
+                             "Re-planning against the refined target failed; "
+                             "keeping the coarse target.");
+                rebuilt.reset();
+              }
+            } catch (const std::exception& error) {
+              RCLCPP_ERROR(node->get_logger(),
+                           "The refined target could not be built into a task "
+                           "(%s); keeping the coarse target.",
+                           error.what());
+            }
+            if (rebuilt.has_value()) {
+              active = refined;
+              planning_task = std::move(*rebuilt);
+              // Walk to the *new* approach pose before anything else. The
+              // rebuilt task's free-motion segment runs from the live state --
+              // which is the old approach pose -- to the new one, so it is the
+              // correction's own length: a couple of centimetres.
+              //
+              // Leaving it out is not an optimisation, it is a lurch. The arm
+              // would stand at the old start while the approach trajectory
+              // began at the new one, and a trajectory controller starts at its
+              // first point: a first point a centimetre away from the measured
+              // state is a step command, and the arm snaps to it at whatever
+              // speed the servo can manage.
+              //
+              // It also keeps the retreat valid. That stage is built as a line
+              // along the panel normal from the actual press stop back to the
+              // approach waypoint; with the arm left at the old waypoint the
+              // two ends are no longer on a normal line, and the recovery
+              // builder refuses with "TCP endpoints do not define a
+              // panel-normal line".
+              if (settings.execute) {
+                const int moved =
+                    runToPrePress(node, planning_task, joint_states);
+                if (moved != 0) {
+                  RCLCPP_ERROR(node->get_logger(),
+                               "Refined target accepted, but moving to its "
+                               "approach pose failed; aborting this press.");
+                  exit_code = moved;
+                }
+              }
+            }
+          }
+        }
+      } else if (settings.execute) {
+        exit_code = runToPrePress(node, planning_task, joint_states);
+      }
+
+      if (settings.execute && exit_code == 0) {
         if (settings.execution_mode == "simulation") {
           if (!settings.simulated_contact || !settings.use_sim_time) {
             RCLCPP_ERROR(node->get_logger(),
@@ -137,7 +316,7 @@ int runSinglePress(const rclcpp::Node::SharedPtr& node,
                          "simulated_contact:=true and use_sim_time:=true.");
             exit_code = 1;
           } else {
-            exit_code = executePressSequence(node, parameters, planning_task,
+            exit_code = executeFromPrePress(node, active, planning_task,
                                              joint_states, true);
           }
         } else if (settings.use_sim_time) {
@@ -158,10 +337,10 @@ int runSinglePress(const rclcpp::Node::SharedPtr& node,
                       "safety cap %.4f m above it.",
                       parameters.press_depth + settings.travel_margin);
           exit_code =
-              executePressSequence(node, parameters, planning_task,
+              executeFromPrePress(node, active, planning_task,
                                    joint_states, false);
         }
-      } else {
+      } else if (!settings.execute) {
         RCLCPP_INFO(node->get_logger(),
                     "Dry run only. In Gazebo, set execute:=true "
                     "simulated_contact:=true after reviewing the plan.");

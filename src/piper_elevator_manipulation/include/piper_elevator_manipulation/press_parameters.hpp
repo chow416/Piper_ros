@@ -58,6 +58,20 @@ struct EditablePressParams {
   double approach_distance{0.030};
   double contact_standoff{0.005};
   double press_depth{0.004};
+
+  // The look-again-then-correct step. These sit here for the same reason the
+  // three above do: they get tuned by repeated trial, and a tunable that needs
+  // a restart is a tunable nobody touches. They are seeded from the launch
+  // parameters before the file is read, so a key the file does not mention
+  // keeps whatever the launch line said rather than snapping to a code default.
+  //
+  // `refine_rounds` doubles as the feature switch, so zero still restores the
+  // pre-refinement behaviour exactly.
+  int refine_rounds{1};
+  double refine_wait_timeout_s{2.0};
+  double refine_fusion_weight{0.5};
+  double refine_max_correction_m{0.020};
+  double refine_max_angle_deg{10.0};
 };
 
 // Reads a ROS parameter, declaring it with `default_value` when it does not

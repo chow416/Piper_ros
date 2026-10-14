@@ -81,7 +81,7 @@ class PressTarget:
     """One button, described in the board frame."""
 
     def __init__(self, name, tip_in_board, press_axis_in_board=None,
-                 taught=False):
+                 taught=False, refine_tip_in_board=None, refine_taught=False):
         self.name = str(name)
         self.tip_in_board = _triple(tip_in_board, f"targets.{name}.tip_in_board")
 
@@ -98,6 +98,15 @@ class PressTarget:
         #: guessing here means driving a rod into an unknown spot.
         self.taught = bool(taught)
 
+        #: The same button, measured from the *other* fiducial -- the single
+        #: marker the refined observation looks at. None when the deployment
+        #: has only one board, which is a supported configuration.
+        self.refine_tip_in_board = (
+            None if refine_tip_in_board is None
+            else _triple(refine_tip_in_board,
+                         f"targets.{name}.refine_tip_in_board"))
+        self.refine_taught = bool(refine_taught)
+
     def resolve(self, T_base_board, direction_sign=1.0):
         """Return (position_m, direction_unit) both in the target frame.
 
@@ -105,13 +114,32 @@ class PressTarget:
         matching the task node's own parameter, for the case where someone
         stores a surface *outward* normal instead of an inward one.
         """
+        return self._resolve_from(T_base_board, self.tip_in_board,
+                                  direction_sign)
+
+    def resolve_refine(self, T_base_refine, direction_sign=1.0):
+        """The same button, located from the refined board instead.
+
+        Only the *position* is meant to be taken from this one: a single marker
+        has four coplanar corners, so its normal is not an average of anything
+        and is not worth using. The direction returned here still follows the
+        button's constant axis, and the task discards it rather than fusing it.
+        """
+        if self.refine_tip_in_board is None:
+            raise ConfigError(
+                f"targets.{self.name} has no refine_tip_in_board, so the "
+                f"refined board cannot locate it")
+        return self._resolve_from(T_base_refine, self.refine_tip_in_board,
+                                  direction_sign)
+
+    def _resolve_from(self, T_base_board, tip_in_board, direction_sign):
         matrix = np.asarray(T_base_board, dtype=float)
         if matrix.shape != (4, 4):
             raise ValueError(f"board pose must be 4x4, got {matrix.shape}")
         rotation = matrix[:3, :3]
         translation = matrix[:3, 3]
 
-        position = translation + rotation @ self.tip_in_board
+        position = translation + rotation @ tip_in_board
         direction = rotation @ self.press_axis_in_board * float(direction_sign)
         return position, direction
 
@@ -170,7 +198,9 @@ class PressTargetSet:
                 name,
                 tip_in_board=entry.get("tip_in_board", {"x": 0, "y": 0, "z": 0}),
                 press_axis_in_board=entry.get("press_axis_in_board"),
-                taught=entry.get("taught", False))
+                taught=entry.get("taught", False),
+                refine_tip_in_board=entry.get("refine_tip_in_board"),
+                refine_taught=entry.get("refine_taught", False))
         return cls(targets)
 
     @classmethod

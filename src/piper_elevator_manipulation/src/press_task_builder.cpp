@@ -10,6 +10,7 @@
 #include <moveit/task_constructor/stages/move_to.h>
 
 #include <algorithm>
+#include <cstdio>
 #include <stdexcept>
 #include <utility>
 #include <vector>
@@ -32,7 +33,14 @@ std::map<std::string, double> solveWaypoint(
   auto solution = solver.solve(robot_model, kArmGroup, kEndEffectorLink,
                                seed, position, direction, &reason);
   if (!solution.has_value()) {
-    throw std::runtime_error("5D IK failed for " + waypoint_name + ": " + reason);
+    // The waypoint itself goes into the message: the residual alone cannot
+    // tell "the arm is too short" from "the solver stopped early", and the
+    // point is what a reach check is done against.
+    char where[80];
+    std::snprintf(where, sizeof(where), " at (%.4f, %.4f, %.4f)", position.x(),
+                  position.y(), position.z());
+    throw std::runtime_error("5D IK failed for " + waypoint_name + where + ": " +
+                             reason);
   }
   return *solution;
 }
@@ -42,7 +50,8 @@ std::map<std::string, double> solveWaypoint(
 PlanningTask createTask(
     const rclcpp::Node::SharedPtr& node,
     const PressTaskParameters& parameters,
-    const std::map<std::string, double>& start_positions) {
+    const std::map<std::string, double>& start_positions,
+    bool use_prerecorded_route, const std::map<std::string, double>* live_positions) {
   auto task = std::make_unique<mtc::Task>();
   task->stages()->setName("five-axis elevator button press");
   task->setTimeout(20.0);
@@ -74,9 +83,23 @@ PlanningTask createTask(
 
   // The free-motion route is loaded before solving IK because its final waypoint
   // is the pose the arm actually holds when the approach begins.
+  //
+  // It is wrong for a *second* build after a refined observation: the arm is
+  // then already standing at the old approach pose, a few millimetres from the
+  // new one, and replaying a route recorded from somewhere else would drag it
+  // back to that route's start and forward again -- metres of travel through a
+  // planning scene that no longer matches where the arm is.
   std::string route_reason;
-  const auto route = piper_elevator_manipulation::loadFreeMotionRoute(
+  auto route = piper_elevator_manipulation::loadFreeMotionRoute(
       node, task->getRobotModel(), kArmGroup, &route_reason);
+  if (!use_prerecorded_route && route.has_value()) {
+    RCLCPP_INFO(node->get_logger(),
+                "Not using the prerecorded route '%s': the arm is already at "
+                "the approach pose, so the free-motion segment is replanned "
+                "from where it stands.",
+                route->name.c_str());
+    route.reset();
+  }
   if (route.has_value()) {
     RCLCPP_INFO(node->get_logger(),
                 "Free motion route '%s' has %zu prerecorded waypoint(s).",
@@ -99,6 +122,9 @@ PlanningTask createTask(
   // route that cannot be solved for degrades to the start state rather than
   // failing the whole task.
   std::vector<std::pair<std::string, std::map<std::string, double>>> ik_seeds;
+  if (live_positions != nullptr) {
+    ik_seeds.emplace_back("the pose the arm is standing in", *live_positions);
+  }
   if (route.has_value() && !route->waypoints.empty()) {
     ik_seeds.emplace_back("free-motion route end '" + route->name + "'",
                           route->waypoints.back().positions);

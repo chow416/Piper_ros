@@ -1,11 +1,140 @@
 # 待办清单
 
-> 截至 2026-09-24。每条都标了**现状证据**（怎么发现的）和**验收标准**（做到什么算完）。
-> 优先级：P0 = 直接决定按压能不能用；P1 = 让按压真正闭环；P2 = 工程化；P3 = 能力扩展。
+> 更新 **2026-10-14**。每条都带**现状证据**（怎么发现的）和**验收标准**（做到什么算完）。
+>
+> 优先级：**P0 = 当前主线** → P1 = 真机能不能用 → P2 = 让按压闭环 → P3 = 工程化 → P4 = 能力扩展。
+> 末尾「明确不做」收录已经拍板**不在计划内**的事，避免反复拿出来讨论。
+>
+> 条目编号自 2026-09-24 起**不重排**，新条目从 20 往后加 —— 正文里有「见第 14 条」
+> 这类交叉引用，重排会让它们全部指错。
+
+## ⚠️ 两条硬约束（用户拍板，不要试图绕过）
+
+1. **启动流程一个字都不变**（2026-10-14 原话：「这是之前单个标定板进行按压的终端
+   启动流程，现在两个标定板，启动流程也别变。保持这样。」）。终端数、命令、交互
+   全部保持单板时代的样子；双板支持只能塞进 `press_board.sh --serve` 内部。
+   任何「再开一个终端跑 XXX」的方案**不合格**。
+2. **不做接触检测**。硬件上没有任何接触手段，按压段按固定行程判定。见「明确不做」。
 
 ---
 
-## P0 —— 直接决定按压能不能用
+## P0 —— 当前主线：视觉二次修正
+
+设计文档在**外层仓库**：`docs/superpowers/specs/2026-10-12-visual-refinement-design.md`。
+一句话：**远处 3×3 大板粗定位 + 按键旁单码精修正，位置融合、法向只用第一次观测**。
+
+### [ ] 20. `tip_in_board` 实机验收（A 板）★ 最先做
+
+**现状证据**：2026-10-14 实测量得**按键在大板的左上**，`board.yaml` 的 `tip_in_board`
+已从占位的 `{0.045, 0.238}` 换成实测的 **`{−0.175, +0.160, 0}`**，`taught: true`。
+⚠️ **但这只是把尺子量出来的数填进去，没有实机按过。**
+
+⚠️ 量完必须抬头确认「面向板子看，按键在板心的**右上还是左上**」—— 板系 `+X` 是
+**印在纸上的方向**，不是世界的方向。板子转着贴、贴反，符号就整体翻，而**代码和
+四元数都看不出来**，只会把杆送到镜像位置去。这次实测就是「横向 17.5 cm 但在左上」，
+所以是 **−0.175**，不是正。
+
+**做法**：`tools/demo.sh --button call`（一键脚本，一条命令跑完原终端 3 + 终端 4）。
+先加 `--dry` 干跑，确认能解出 IK、规划成功，再实机跑一次。
+
+**干跑顺带看**：`marker_locator` 在 `go_home` 位姿下能不能正常读出 A 板。
+
+**验收**：杆尖落在**按键中心**（目视几毫米内），不是板心。
+
+### [ ] 21. B 码（ID 9）在 `pre_press` 位姿下可见吗 ★ 决定方案成不成立
+
+**现状证据**：spec §7 未决数据第 1 条，**从来没测过**。第二段精修正整个建立在
+「臂停在 `pre_press` 时，腕部相机能看到按键上方那个 28.5 mm 单码」之上。
+
+⚠️ 这个风险是**非对称**的：如果看不到，第二段没有替代方案，整个「两次观测」设计
+要推倒。所以**必须在写任何代码之前测**，否则可能写完一整套才发现地基是空的。
+
+**做法**：让臂停在 `pre_press`（干跑算出的位姿），看相机；或实机按压途中抓一帧。
+
+**验收**：`min_markers=1` 下能从 `pre_press` 解出 ID 9 的位姿，抖动可接受。
+
+**已知量化背景**：单码噪声底比 3×3 高得多（3×3 实测抖动 0.3~1.3 mm，单个
+28.5 mm 码 2.3~3.3 mm）。`demo.sh --max-jitter-mm` 的默认值是按 3×3 定的，
+单码会被误报成「板子在动」，要放宽。
+
+### [ ] 22. 修正 `run_press_task.md` 里的失能描述（安全相关，10 分钟）
+
+**现状证据**：2026-10-14 实测 + 日志核实 —— **任何「停进程」的方式都不会让臂失能**。
+使能/失能是**电机固件**的状态，只由一帧 CAN `0x471` 改变；全仓库只有
+`PiperSystem::on_deactivate()`（`piper_system.cpp:421`）会发它，而它**从来没被调用过**
+（Ctrl-C 走的是硬件的 `on_shutdown()`，`PiperSystem` 没重写它）。
+
+现有文档里两处**与事实相反**：
+
+- `run_press_task.md:327`「（控制器管理器退出会失能，臂会落到硬限位上）」
+- `run_press_task.md:362`「`kill -9 <pid>  # 用 -9！普通 kill 会走失能钩子，臂会掉到硬限位」
+
+第二条尤其危险：它把「用 `-9`」说成保命操作，而**普通 `kill` 和 `kill -9` 毫无区别**。
+
+**验收**：文档与实测一致，并写清**唯一**能真正失能的办法
+（`ros2 control set_hardware_component_state PiperSystem inactive`）。
+
+### [ ] 23. `marker_locator` 支持双板
+
+**现状证据**：现在是**单板节点** —— 一个 `self.spec`、一次 `detect()`、一个话题。
+PnP 层本身没问题（`aruco_board.py` 的对象点表就是白名单，不在表里的 marker 进
+`solvePnP` 前就被 `continue` 掉），**风险全在节点层，而且是静默的**。
+
+**四条必守项**（spec §3.2，每一条都能单独把事情搞坏）：
+
+1. 两块板**各解一次、各发各的话题** —— 写成 `coarse or fine`（谁先解出就发谁）
+   会把 A 板位置发到精修正话题上，而日志 / RMS / marker 数**全部正常**
+2. `accepted_ids` **互斥 + 加载时硬校验** —— 整个隔离完全建立在不重叠上
+3. **每块板各存一份几何** —— 现在 `board.yaml` 只有一份 `marker_length`/`separation`，
+   而打印缩放是**系统性**的
+4. **`min_markers` 是主判据，RMS 不是** —— 板子贴反时 9 码只剩 1 码，那 1 码能让
+   `solvePnP` 拟合出 **RMS 0.14 px** 的漂亮错位姿
+
+**验收**：两块板同框时各发各的话题，A 板位置不会出现在精修正话题上。
+
+### [ ] 24. `press_target_bridge.py`：复活或删除，不要两边都留
+
+**现状证据**：它**已安装、已在 `CMakeLists.txt`、已写进 `README.md`、还有集成测试**
+（`test_bridge_live.py`），但 `press_board.sh` **从来不起它** —— 实际链路走的是
+`tools/press_board_centre.py`（一次性 CLI，`press_board.sh:464` 每按一次跑一次）。
+**文档里有、链路里没有**，这种状态最容易误导人（本次就误导过我一次）。
+
+**为什么它现在又被需要**：精修正必须在 `pre_press` 那一刻**在线**工作，一次性 CLI
+做不到 —— 而 bridge 是常驻节点，**正好是需要的形态**。
+
+**验收**：要么它在 `press_board.sh --serve` 里真的被起起来，要么它和它的 README
+章节一起删掉。**没有第三种状态。**
+
+### [ ] 25. 拆 `executePressSequence` → `runToPrePress` + `executeFromPrePress`
+
+**现状证据**：spec §3.5。精修正的断点就在这里 —— 必须能在 `pre_press` 停住、
+拿一次观测、再继续。
+
+**验收**：`max_refinement_rounds=0` 时行为与现在**逐位一致**（先立回归基线，再改）。
+
+### [ ] 26. 排查 CAN `No buffer space available`
+
+**现状证据**：2026-10-14 的 `ros2_control_node` 日志里有
+
+```
+[ERROR] [PiperSystem]: CAN write failed: write(CAN): No buffer space available
+```
+
+（`RCLCPP_ERROR_THROTTLE`，2 s 一次）。**同一天** `go_home.py` 报了
+`error_code = 0` / `Goal reached, success!`，而**关节一度一动不动**（前后逐关节零差异）。
+时间上挨得很近。
+
+**存疑**：不是规划/控制问题，而是**命令压根没发上 CAN**。注意同日日志里还有
+**两个** `ros2_control_node` 在 23 秒内先后 `configure` 了 `PiperSystem`，
+字节数最小的那个 3 秒后就没了 —— 重复实例的嫌疑不能排除（见第 9 条）。
+
+**验收**：能复现时定位到根因；或证明只是瞬态。
+
+---
+
+## P1 —— 真机能不能用
+
+> 第 1、2 条已完成，正文留作证据。未完成的是 **1b、3、4**。
 
 ### [x] 1. 标定 `press_tcp` 的工具长度（已完成 2026-09-24）
 
@@ -125,22 +254,9 @@ axial offset from target -0.0035 m             ← 模型空间差 3.5mm
 
 ---
 
-## P1 —— 让按压真正闭环
+## P2 —— 让按压真正闭环
 
-### [ ] 5. 接入接触/力反馈，把「固定行程」换成「接触停止」
-
-**现状证据**：实机走的是 `execution_mode=hardware_fixed_travel`，`press_depth` 就是
-停止条件；`/press/contact` 在实机上没有任何发布者。任务书 ③ 只做到了一半。
-
-**候选方案**（按代价排序）：
-
-1. **电机电流**：SDK 有 `GetArmLowSpdInfoMsgs().bus_current`（0.001 A），
-   `PiperSystem` 的反馈解析已经覆盖 `0x2A5/0x2A6/0x2A7`，扩到低速度帧即可。
-   零额外硬件。
-2. 面板侧加微动开关 / 行程开关，走 `std_msgs/Bool`。
-3. 末端加力传感器（最贵，但要真力控只能这样）。
-
-**验收**：`require_contact=true` 路径在实机上能跑通；按不动时能报 `CONTACT_NOT_DETECTED`。
+### [~] 5. ~~接入接触/力反馈~~ —— 已拍板不做，见「明确不做」
 
 ### [ ] 6. 接入 TF 变换，放开 `world`/`base_link` 以外的坐标系
 
@@ -176,7 +292,7 @@ frame 转到 planning frame，同时校验 TF 的时间戳新鲜度（TF 比目�
 
 ---
 
-## P2 —— 工程化
+## P3 —— 工程化
 
 ### [x] 9. 让 bringup 自己拒绝重复实例（已完成 2026-09-24）
 
@@ -207,26 +323,24 @@ frame 转到 planning frame，同时校验 TF 的时间戳新鲜度（TF 比目�
 其中 `piper_press_hardware` 是当时的调试包，现已从工作区移除；
 此处仅保留原提交记录。
 
-**⚠️ 仍然存在的风险：没有远程备份。**
+**✅ 2026-10-13 更新：远程备份早已做完，上面那一节原本的内容（「没有远程备份」
+「只存在于这一台机器上」）已全部作废。**
 
-`origin` 指向 `https://github.com/agilexrobotics/Piper_ros.git` —— 那是 **AgileX 的官方仓库，
-不是我们自己的**，所以**不能也不该 push 到那里**。也就是说这份工作目前**只存在于这一台机器上**，
-硬盘坏了就没了。
+现在是**三个**远端，而且 **推 GitHub 完全不更新 GitLab**（那份是扁平快照，没有 git 血缘）：
 
-**做法**：在 GitHub / GitLab / 内网 Git 上建一个**私有**仓库，然后：
+| 仓库 | 远端 | 分支 |
+|---|---|---|
+| `src/Piper_ros`（内层） | GitHub `chow416/Piper_ros` | **`piper-press-dev`**（⚠️ 内层**没有 `main`**）|
+| `/home/zlf/piper_ws`（外层） | GitHub `chow416/piper_ws` | `main` |
+| 公司 GitLab `elevator-arm-flow-verify` | `code.pudu.work`（**内网**）| `initial-import`（`main` 受保护）|
 
-```bash
-cd /home/zlf/piper_ws/src/Piper_ros
-git remote rename origin upstream        # 官方仓库改名为 upstream，保留只读参考
-git remote add origin <你们自己的仓库地址>
-git push -u origin humble piper-press-dev
-```
-
-**验收**：`git push` 成功，且在另一台机器上 `git clone` 能拿到今天的提交。
-
-**另一件相关的事**：`/home/zlf/piper_ws/src/third_party/`（`moveit_task_constructor`、
-`piper_sdk`）**在这个 git 仓库之外**，也不在任何版本控制里。新机器只 clone 这个仓库是**编译不起来的**。
-需要单独决定怎么管（submodule、脚本拉取、还是也放进仓库）。
+- 官方仓库已改名 `upstream` 保留只读参考。
+- ⚠️ **用户约定：「推远端」= 同时推 GitLab + GitHub。** GitLab 那份每次都要重新
+  rsync（快照在 `~/eafv-snapshot`）。排除清单里 **`/docs/` 的斜杠必须打头** ——
+  写成未锚定的 `docs/` 会**静默**排掉所有层的 docs（2026-10-13 因此少了 57 个文件）。
+- `src/third_party/`：`moveit_task_constructor` 和 `py_binding_tools` **都是正式子模块**，
+  新机器 `clone --recurse-submodules` 能编译；**只有 `piper_sdk` 不在版本控制里**
+  （它有 `COLCON_IGNORE`，`piper_hardware` 也不依赖它，不影响编译）。
 
 ### [ ] 11. 单元测试接线
 
@@ -241,15 +355,18 @@ git push -u origin humble piper-press-dev
 
 **验收**：`colcon test` 有真实用例，覆盖上面三块；CI 可跑。
 
-### [ ] 12. 拆分 `press_button_demo.cpp`
+### [x] 12. 拆分 `press_button_demo.cpp`（已完成 2026-10-12）
 
-**现状证据**：已经约 800 行，`main` / `runSinglePress` / `createTask` /
-`executePressSequence` / `JointStateCache` 全挤在一个文件里。
+**结果**：**1288 → 238 行**，新增 7 个模块（`.hpp` + `.cpp`）：
+`press_constants` / `press_solution` / `joint_state_cache` / `press_parameters` /
+`press_task_builder` / `press_executor` / `press_runner`。
 
-**建议**：拆成 `task_builder`（建 MTC 任务树）/ `task_executor`（执行 + 监控）/
-`main`（参数与循环）。`JointStateCache` 可以独立成头文件。
+**三层验收都过**：① 全量重建零错误零警告 ② `scripts/verify_pure_move.py --before 067d404`
+→ **27 个符号逐字一致** ③ **实机完整按压一趟**（六个相位全执行，关节跟踪最差
+0.079°（接近段）/ 0.114°（按压段），模型空间误差 0.2 mm，回起点差 ≤ 0.07°）。
 
-**验收**：单文件不超过 ~300 行，职责单一。
+⚠️ 这只是让过渡形态**可维护**，**没有**把它变成行为树 action server ——
+契约里「已知过渡缺陷」的定性仍然成立（见第 7 条）。
 
 ### [ ] 13. 补齐 `ompl_planning.yaml`，明确 planner 配置
 
@@ -312,7 +429,7 @@ launch 文件里的 `DeclareLaunchArgument`（目标与闸门）、`config/home_
 
 ---
 
-## P3 —— 能力扩展
+## P4 —— 能力扩展
 
 ### [ ] 18. 多工位点位表
 
@@ -327,9 +444,34 @@ launch 文件里的 `DeclareLaunchArgument`（目标与闸门）、`config/home_
 
 ---
 
-## 建议的下周顺序
+## 明确不做（已拍板，别反复拿出来）
 
-1. **先跑一次实机 Execute**（第 1 条的诊断已经埋好），拿到逐关节报告
-2. 根据报告决定：修第 2 条（限值标定）还是做标定补偿
-3. 同时并行推进第 3 条（碰撞几何，不需要硬件依赖）
-4. 第 10 条（git）**当天就做**，别再拖 —— 现在整个工作区只有一份工作副本
+### [~] 5. 接触检测 / 力反馈
+
+用户 2026-10-13 原话：
+
+> 目前做不到接触检测，没有任何接触检测的手段，按压段只能按照固定按压行程的方式
+> 来判定是否成功。我之前没说过要做接触检测，就算要做也不是目前的任务。
+
+**硬件事实**：**没有**任何接触传感器；`/press/contact` 在实机上**没有发布者**；
+`execution_mode=hardware_fixed_travel` 是唯一能走的路（轨迹即停止条件，
+`hardware_travel_margin_m` 之上的实测 TCP 行程作为独立安全上限）。
+
+⚠️ 别把它写成「现状不在本设计范围内」—— 那样读起来像**默认存在**接触检测。
+要如实写成**硬件现实**。
+
+⚠️ 但架构契约（`.cursor/skills/piper-press-planning-control/ARCHITECTURE.md` §8）
+把「补真实接触传感器」排在行为树 action server **之前**。这个顺序冲突**当前无解**，
+以用户拍板为准 —— 第 7 条（行为树）因此也一并搁置。
+
+---
+
+## 下一步顺序（2026-10-14 重排）
+
+1. **第 20 条** —— `tip_in_board` 实机验收（`tools/demo.sh --button call`，先 `--dry`）
+2. **第 21 条** —— B 码可见性。**它决定第二段方案成不成立，必须在写代码之前做**
+3. **第 22 条** —— 修 `run_press_task.md` 的两处错误说法（10 分钟，安全相关）
+4. 以上都过了，才动 23 → 24 → 25（双板感知 → 桥接复活 → 断点拆分）
+5. 第 3 条（碰撞几何）**不需要硬件**，可以全程并行
+
+> 旧的「下周顺序」（先跑实机 Execute → 修限值 → git 当天做）已经全部完成，作废。

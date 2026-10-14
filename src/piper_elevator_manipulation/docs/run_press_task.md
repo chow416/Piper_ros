@@ -323,8 +323,12 @@ ros2 launch piper_elevator_manipulation press_button_hardware.launch.py \
 ros2 run piper_elevator_manipulation preflight_check.py
 ```
 
-如果是 `NOT CLEAN`，按它给出的 PID `kill -9`，然后**重启终端 1 的 bringup**
-（控制器管理器退出会失能，臂会落到硬限位上），再跑一次 `go_home.py`。
+如果是 `NOT CLEAN`，按它给出的 PID `kill -9`，然后**重启终端 1 的 bringup**，
+再跑一次 `go_home.py`。
+
+> ⚠️ **臂不会失能、不会掉** —— 详见 §8「安全退出」。杀掉 `ros2_control_node` 之后
+> 电机**保持使能、停在原地**；重启 bringup 时 `on_activate()` 会从实测位姿播种
+> state 和 command，所以**不会跳变**。
 
 **验证是不是这个问题**：在终端 3 的日志里找
 
@@ -359,7 +363,8 @@ controller manager」**。spawner 问一个 manager、配置的是另一个，�
 如果你看到的是这个拒绝信息，按它给的命令做：
 
 ```bash
-kill -9 <pid>          # 用 -9！普通 kill 会走失能钩子，臂会掉到硬限位
+kill -9 <pid>          # 用 -9 只是为了确保进程真的死掉
+                       # ⚠️ 普通 kill 和 kill -9 对臂的影响【完全一样】—— 都不会失能
 # 然后重新跑终端 1
 ros2 run piper_elevator_manipulation go_home.py
 ```
@@ -401,3 +406,66 @@ rotation` / `outside the accepted workspace box`）。对照 `perception_interfa
    感知如果输出在相机系，需要先补这一层。
 
 完整待办见 `todo.md`。
+
+---
+
+## 8. 安全退出 —— 怎么让臂松手
+
+> 2026-10-14 实测 + 日志核实。**本节推翻了本手册早先的说法。**
+
+### 事实：停掉任何进程都不会失能
+
+使能/失能**不是 ROS 的状态，是电机固件的状态**，只由一帧 CAN `0x471` 改变
+（`piper_system.cpp:26`、`287`）。全仓库**只有一处**会发失能帧：
+`PiperSystem::on_deactivate()`（`piper_system.cpp:421`）。
+
+而 Ctrl-C 时 `controller_manager` 走的是：
+
+```
+先失活【控制器】   joint_state_broadcaster / arm_controller
+再 shutdown【硬件】 PiperSystem          ← 注意是 shutdown，不是 deactivate
+```
+
+`PiperSystem` 只重写了 `on_init / on_configure / on_activate / on_deactivate` ——
+**没有 `on_shutdown`，也没有析构函数**。基类的 `on_shutdown()` 是空操作
+⇒ **失能帧从来没发出去过**。
+
+日志证据：两次干净退出（2026-10-13 与 2026-10-14）结尾**逐字相同**，
+`Motors disabled` 在全部日志里出现 **0 次**（`Motors enabled` 出现 2 次）。
+
+| 操作 | 会失能吗 | 臂的表现 |
+|---|---|---|
+| Ctrl-C 终端 3 / 4（任务节点）| ❌ | 纹丝不动 |
+| Ctrl-C 终端 1（bringup）| ❌ | **仍保持使能、保持位姿** |
+| `kill` / `kill -9` | ❌ | 同上（**两者没有区别**）|
+| 停容器 / 重启主机 | ❌ | 同上（固件状态不随主机变）|
+| 显式切硬件到 INACTIVE（见下）| ✅ | 失能下垂 |
+| 断机械臂电源 | ✅ | 直接掉 |
+
+### 好消息与坏消息
+
+- ✅ **停任何进程（含重启容器）都不会让臂掉下来。** 以前「改配置要重启容器、
+  但臂会掉」的顾虑**不存在**。
+- ❌ 反过来：**没法靠关进程让它松手。**
+
+### 唯一能真正失能的办法
+
+在 controller_manager 活着时，把硬件组件切到 INACTIVE：
+
+```bash
+ros2 control set_hardware_component_state PiperSystem inactive
+```
+
+（服务版：`/controller_manager/set_hardware_component_state`，类型
+`controller_manager_msgs/srv/SetHardwareComponentState`；
+`lifecycle_msgs/msg/State` 的 `PRIMARY_STATE_INACTIVE = 2`。）
+
+### 失能之后
+
+重力把 joint2/joint3 拽到**机械硬限位**（j2 ≈ 0°、j3 ≈ +1.9°）。从归位姿态失能，
+末端约**下垂 10 cm** —— 是缓慢下垂不是自由落体，**但关节处有夹点会夹伤手指**。
+
+- **短时离开** = 什么都不关（臂使能就稳住了）
+- **收工** = 先在臂下方垫泡沫/纸箱，再决定要不要失能
+
+🚫 **不要用手扶**（关节夹手）；🚫 **绝不要用「关电源」退出**（急停除外）。

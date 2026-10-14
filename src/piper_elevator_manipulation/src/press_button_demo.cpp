@@ -90,7 +90,49 @@ int main(int argc, char** argv) {
   const std::string press_params_file =
       getOrDeclareParameter(node, "press_params_file", std::string(""));
 
+  // The look-again-then-correct step. `max_refinement_rounds` of zero turns it
+  // off, and that is the regression baseline the split executor has to
+  // reproduce exactly -- so it is a documented setting, not a debug flag.
+  piper_elevator_manipulation::RefinementParams refinement;
+  refinement.rounds = static_cast<int>(
+      getOrDeclareParameter<int64_t>(node, "max_refinement_rounds", 1));
+  refinement.topic = getOrDeclareParameter(
+      node, "refine_target_topic", std::string("/press/refine_pose"));
+  refinement.wait_timeout_s =
+      getOrDeclareParameter(node, "refine_wait_timeout_s", 2.0);
+  refinement.fusion_weight =
+      getOrDeclareParameter(node, "refine_fusion_weight", 0.5);
+  refinement.max_correction_m =
+      getOrDeclareParameter(node, "refine_max_correction_m", 0.020);
+  refinement.max_angle_deg =
+      getOrDeclareParameter(node, "refine_max_angle_deg", 10.0);
+  if (refinement.rounds < 0) {
+    RCLCPP_ERROR(logger, "max_refinement_rounds must be 0 or more");
+    rclcpp::shutdown();
+    return 2;
+  }
+  if (refinement.rounds > 0) {
+    if (refinement.wait_timeout_s <= 0.0) {
+      // Not "skips the observation": a zero timeout makes the task wait for a
+      // message that has to arrive in the same instant, which is a press that
+      // never starts. A vision failure has to cost accuracy, never the press.
+      RCLCPP_ERROR(logger,
+                   "refine_wait_timeout_s must be greater than zero; use "
+                   "max_refinement_rounds:=0 to turn the refinement off.");
+      rclcpp::shutdown();
+      return 2;
+    }
+    if (refinement.fusion_weight < 0.0 || refinement.fusion_weight > 1.0) {
+      RCLCPP_ERROR(logger, "refine_fusion_weight must be within [0, 1]");
+      rclcpp::shutdown();
+      return 2;
+    }
+  }
+
   std::unique_ptr<piper_elevator_manipulation::TargetSource> target_channel;
+  //: Null unless the refinement is on, which is also how a deployment with a
+  //: single board reaches runSinglePress.
+  std::unique_ptr<piper_elevator_manipulation::TargetSource> refine_channel;
   try {
     if (targets_from_topic) {
       piper_elevator_manipulation::TargetSourceOptions source_options;
@@ -115,6 +157,30 @@ int main(int argc, char** argv) {
       }
       target_channel = std::make_unique<piper_elevator_manipulation::TargetSource>(
           node, source_options);
+      // Also created when a parameter file is in play, because that file can
+      // turn the refinement on and the channel has to exist before it can be
+      // used. A launch-level zero still wins, so nothing here can switch the
+      // feature on by accident.
+      if (refinement.rounds > 0 || !press_params_file.empty()) {
+        // The same validation as the coarse channel on a different topic. Two
+        // separate instances rather than one node with two subscriptions: a
+        // coarse pose arriving where a refined one belongs fuses into a wrong
+        // correction while every log line, rms and marker count still looks
+        // healthy, and separate instances leave nowhere for that to happen.
+        piper_elevator_manipulation::TargetSourceOptions refine_options =
+            source_options;
+        refine_options.topic = refinement.topic;
+        refine_channel =
+            std::make_unique<piper_elevator_manipulation::TargetSource>(
+                node, refine_options);
+        RCLCPP_INFO(logger,
+                    "Refinement: up to %d round(s) on '%s', wait %.1f s, "
+                    "weight %.2f, gates %.1f mm / %.1f deg",
+                    refinement.rounds, refinement.topic.c_str(),
+                    refinement.wait_timeout_s, refinement.fusion_weight,
+                    refinement.max_correction_m * 1000.0,
+                    refinement.max_angle_deg);
+      }
     }
   } catch (const std::exception& exception) {
     RCLCPP_ERROR(logger, "%s", exception.what());
@@ -137,18 +203,47 @@ int main(int argc, char** argv) {
     double approach = approach_distance;
     double standoff = contact_standoff;
     double depth = press_depth;
+    // Seeded from the launch parameters before the file is read: a key the file
+    // does not mention keeps whatever the launch line said, instead of snapping
+    // back to a code default nobody typed.
+    piper_elevator_manipulation::RefinementParams refine_now = refinement;
     std::string params_source = "ROS parameters";
     if (!press_params_file.empty()) {
       EditablePressParams edited;
       edited.approach_distance = approach_distance;
       edited.contact_standoff = contact_standoff;
       edited.press_depth = press_depth;
+      edited.refine_rounds = refinement.rounds;
+      edited.refine_wait_timeout_s = refinement.wait_timeout_s;
+      edited.refine_fusion_weight = refinement.fusion_weight;
+      edited.refine_max_correction_m = refinement.max_correction_m;
+      edited.refine_max_angle_deg = refinement.max_angle_deg;
       if (readPressParamsFile(node, press_params_file, &edited)) {
         approach = edited.approach_distance;
         standoff = edited.contact_standoff;
         depth = edited.press_depth;
+        refine_now.rounds = edited.refine_rounds;
+        refine_now.wait_timeout_s = edited.refine_wait_timeout_s;
+        refine_now.fusion_weight = edited.refine_fusion_weight;
+        refine_now.max_correction_m = edited.refine_max_correction_m;
+        refine_now.max_angle_deg = edited.refine_max_angle_deg;
         params_source = press_params_file;
       }
+    }
+    // An edit lands on the next press, so it is also the next press that has to
+    // catch a value that cannot work. Degrading to the launch parameters keeps
+    // the promise the rest of that file makes: a broken setting costs the
+    // correction, never the press.
+    if (refine_now.rounds > 0 &&
+        (refine_now.wait_timeout_s <= 0.0 || refine_now.fusion_weight < 0.0 ||
+         refine_now.fusion_weight > 1.0)) {
+      RCLCPP_ERROR(logger,
+                   "%s has an unusable refinement setting (wait %.2f s, weight "
+                   "%.2f); falling back to the launch parameters for this "
+                   "press.",
+                   params_source.c_str(), refine_now.wait_timeout_s,
+                   refine_now.fusion_weight);
+      refine_now = refinement;
     }
     // Say what will be used, but only when it changes. An operator editing the
     // file wants to see the new values land; a line per press would just be
@@ -156,8 +251,11 @@ int main(int argc, char** argv) {
     char summary[256];
     std::snprintf(summary, sizeof(summary),
                   "approach %.1f mm, contact standoff %.1f mm, press depth "
-                  "%.1f mm",
-                  approach * 1000.0, standoff * 1000.0, depth * 1000.0);
+                  "%.1f mm, refine %d round(s) w=%.2f, gates %.1f mm / %.1f deg",
+                  approach * 1000.0, standoff * 1000.0, depth * 1000.0,
+                  refine_now.rounds, refine_now.fusion_weight,
+                  refine_now.max_correction_m * 1000.0,
+                  refine_now.max_angle_deg);
     if (summary != reported_params) {
       reported_params = summary;
       RCLCPP_INFO(logger, "Press parameters (from %s): %s",
@@ -220,7 +318,8 @@ int main(int argc, char** argv) {
       exit_code = 2;
       break;
     }
-    exit_code = runSinglePress(node, settings, parameters, joint_states);
+    exit_code = runSinglePress(node, settings, parameters, joint_states,
+                               refine_channel.get(), refine_now);
     ++press_count;
     if (targets_from_topic) {
       RCLCPP_INFO(logger, "Press %ld finished with exit code %d.",
@@ -231,6 +330,10 @@ int main(int argc, char** argv) {
   if (target_channel) {
     RCLCPP_INFO(logger, "Target source '%s': %zu message(s) rejected in total.",
                 target_channel->topic().c_str(), target_channel->rejectedCount());
+  }
+  if (refine_channel) {
+    RCLCPP_INFO(logger, "Refine source '%s': %zu message(s) rejected in total.",
+                refine_channel->topic().c_str(), refine_channel->rejectedCount());
   }
 
   rclcpp::shutdown();

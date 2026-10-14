@@ -46,8 +46,8 @@ import sys
 import time
 
 import cv2
-import numpy as np
 import rclpy
+import yaml
 from geometry_msgs.msg import PoseStamped
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
@@ -59,8 +59,9 @@ from sensor_msgs.msg import CompressedImage, JointState
 from tf2_ros import Buffer, TransformListener
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from aruco_board import (BoardSpec, CameraIntrinsics,      # noqa: E402
-                         annotate, detect, resolve_config_path)
+from aruco_board import (CameraIntrinsics, annotate,       # noqa: E402
+                         board_specs_from_config, detect,
+                         resolve_config_path)
 from press_targets import quaternion_from_matrix, transform_to_matrix  # noqa: E402
 
 #: A name rather than a path: the same file sits at a different depth in the
@@ -69,6 +70,10 @@ from press_targets import quaternion_from_matrix, transform_to_matrix  # noqa: E
 DEFAULT_CONFIG = "config/board.yaml"
 
 DEFAULT_CAMERA_FRAME = "wrist_depth_camera_optical_frame"
+
+#: Used when `refine_board.pose_topic` is absent. The two boards publish to
+#: separate topics on purpose -- see `BoardChannel`.
+DEFAULT_REFINE_TOPIC = "/perception/refine_board_pose"
 
 CONTRACT_QOS = QoSProfile(
     reliability=ReliabilityPolicy.RELIABLE,
@@ -169,6 +174,115 @@ class JointStability:
         return (not self._received) or self._stable >= self.samples
 
 
+class BoardChannel:
+    """One board: its spec, its gate, its publisher, its own reasons to fail.
+
+    A deployment has two of these -- a wide board seen from far away, and a
+    single marker seen from the approach pose -- and they differ in geometry,
+    marker count, gate and output topic. They are separate objects rather than
+    two passes over shared state because the failure they must not have is a
+    *routing* failure: a coarse board pose published on the refined topic fuses
+    into a wrong correction, and every log line, rms and marker count still
+    looks perfectly healthy. Here there is nowhere for the two to mix; each
+    channel is the only writer of its own publisher.
+
+    The miss/accept bookkeeping is per channel for the same reason. Shared, the
+    two boards failing in turn would each reset the other's "reason unchanged"
+    counter, and two warning lines per attempt would be printed forever.
+    """
+
+    def __init__(self, name, spec, min_markers, topic, publisher, logger):
+        self.name = name
+        self.spec = spec
+        self.min_markers = min_markers
+        self.topic = topic
+        self.publisher = publisher
+        self.logger = logger
+        self.detector = spec.make_detector()
+        self.published = 0
+        self.misses = 0
+        self.last_reason = ""
+
+    def look(self, frame, intrinsics):
+        return detect(frame, intrinsics.camera_matrix,
+                      intrinsics.dist_coeffs, self.spec,
+                      detector=self.detector,
+                      min_markers=self.min_markers)
+
+    def gate(self, result, max_reproj, min_distance, max_distance):
+        """None when the detection may be published, else (category, detail).
+
+        `min_markers` is already applied inside `detect()`. Reprojection error
+        is deliberately the weaker of the two gates: a board seen from behind
+        collapses to one marker, and that survivor still solves to a
+        confident pose at a fraction of a pixel. A small rms therefore means
+        "the arithmetic is self-consistent", not "this is the board".
+
+        The reason is split in two because the caller de-duplicates on it: a
+        measured number folded into the category would make every attempt a
+        new reason, and the log would fill at the processing rate instead of
+        saying why nothing is published.
+        """
+        if result is None:
+            return (f"no board (need {self.min_markers} markers)", "")
+        if result.reproj_rms_px > max_reproj:
+            return ("reprojection error is above the gate",
+                    f"{result.reproj_rms_px:.2f} px, limit {max_reproj} px")
+        if not min_distance <= result.distance <= max_distance:
+            return ("the board is outside the accepted distance range",
+                    f"{result.distance * 100:.1f} cm, range "
+                    f"{min_distance * 100:.0f}-{max_distance * 100:.0f} cm")
+        return None
+
+    def publish(self, matrix, frame_id, clock):
+        qx, qy, qz, qw = quaternion_from_matrix(matrix[:3, :3])
+        message = PoseStamped()
+        message.header.stamp = clock.now().to_msg()
+        message.header.frame_id = frame_id
+        message.pose.position.x = float(matrix[0, 3])
+        message.pose.position.y = float(matrix[1, 3])
+        message.pose.position.z = float(matrix[2, 3])
+        message.pose.orientation.x = qx
+        message.pose.orientation.y = qy
+        message.pose.orientation.z = qz
+        message.pose.orientation.w = qw
+        self.publisher.publish(message)
+        self.published += 1
+        if self.published == 1:
+            t = matrix[:3, 3]
+            self.logger.info(
+                f"{self.name}: board at ({t[0]:+.4f}, {t[1]:+.4f}, "
+                f"{t[2]:+.4f}) m in '{frame_id}'")
+
+    def reject(self, reason, detail=""):
+        """Record why nothing was published, once per reason change.
+
+        Either the detector or the gates fire several times a second, and a
+        reason repeated at that rate buries everything else in the log. Which
+        only holds if `reason` is a category -- see `gate`.
+        """
+        if reason == self.last_reason:
+            self.misses += 1
+            return
+        if self.last_reason:
+            self.logger.warn(
+                f"{self.name}: ...previous reason held for "
+                f"{self.misses} attempts")
+        self.last_reason = reason
+        self.misses = 1
+        message = f"{self.name}: not publishing: {reason}"
+        if detail:
+            message += f" -- {detail}"
+        self.logger.warn(message)
+
+    def accept(self):
+        if self.last_reason:
+            self.logger.info(f"{self.name}: detecting again after "
+                             f"{self.misses} refusals")
+            self.last_reason = ""
+            self.misses = 0
+
+
 class MarkerLocator(Node):
 
     def __init__(self, parameter_overrides=None):
@@ -205,11 +319,8 @@ class MarkerLocator(Node):
         self.declare_parameter("debug_topic",
                                "/perception/debug_image/compressed")
 
-        self.spec = BoardSpec.from_yaml(
-            resolve_config_path(self.get_parameter("config").value))
         self.camera_frame = self.get_parameter("camera_frame").value
         self.target_frame = self.get_parameter("target_frame").value
-        self.min_markers = self._resolve_min_markers()
         self.max_reproj = float(self.get_parameter("max_reproj_px").value)
         self.min_distance = float(self.get_parameter("min_distance_m").value)
         self.max_distance = float(self.get_parameter("max_distance_m").value)
@@ -225,7 +336,7 @@ class MarkerLocator(Node):
             self.get_parameter("publish_debug_image").value)
 
         self.intrinsics = self._load_intrinsics()
-        self.detector = self.spec.make_detector()
+        self.channels = self._load_channels()
 
         self.stability = JointStability(
             float(self.get_parameter("stationary_tolerance_rad").value),
@@ -236,8 +347,6 @@ class MarkerLocator(Node):
         self.buffer = Buffer()
         self.listener = TransformListener(self.buffer, self)
 
-        self.pose_publisher = self.create_publisher(
-            PoseStamped, self.get_parameter("board_topic").value, CONTRACT_QOS)
         self.debug_publisher = self.create_publisher(
             CompressedImage, self.get_parameter("debug_topic").value,
             CONTRACT_QOS)
@@ -252,33 +361,68 @@ class MarkerLocator(Node):
         self._last_debug = 0.0
         self._last_reason = ""
         self._misses = 0
-        self._published = 0
         self.create_timer(self.process_period, self.tick)
 
         self._describe_startup()
 
     # -- setup -------------------------------------------------------------
 
-    def _resolve_min_markers(self):
-        """How many markers must decode before the pose is published.
+    def _load_channels(self):
+        """One channel per board declared in `config/board.yaml`.
 
-        An explicit positive `min_markers` wins. Zero (the default) follows
-        `config/board.yaml`, which is what a deployment that swaps between a
-        3x3 calibration board and a single marker on the elevator needs: the
-        shape is already described in that file, and a leftover constant from
-        the other shape fails in a disguise. Six with a single marker prints
-        `no board (need 6 markers)` forever, which reads exactly like a camera
-        that cannot see anything -- the one diagnosis you would have ruled out
-        first, and the wrong one.
+        Two boards is the deployment this was written for -- a wide board far
+        away for the coarse target, a single marker at the approach pose for the
+        refined one -- but one board stays a first-class configuration: the file
+        simply omits `refine_board`.
+
+        An explicit `min_markers` parameter applies to the coarse channel only.
+        One number cannot serve both: the same value that is right for the wide
+        board is an impossible gate for a lone marker, and the failure it
+        produces (`no board (need N markers)`, forever) reads exactly like a
+        camera that cannot see anything -- the one diagnosis you would have
+        ruled out first, and the wrong one.
+
+        The refined board's topic comes from the same section as its geometry,
+        so the node and the bridge that consumes it read it from one place
+        instead of two that can drift apart.
         """
-        configured = int(self.get_parameter("min_markers").value)
-        if configured > 0:
-            return configured
-        derived = self.spec.auto_min_markers
-        total = self.spec.markers_x * self.spec.markers_y
+        path = resolve_config_path(self.get_parameter("config").value)
+        with open(path, encoding="utf-8") as handle:
+            data = yaml.safe_load(handle) or {}
+        coarse_spec, refine_spec = board_specs_from_config(data)
+
+        plan = [("coarse", coarse_spec,
+                 self.get_parameter("board_topic").value,
+                 int(self.get_parameter("min_markers").value))]
+        if refine_spec is not None:
+            refine_node = data.get("refine_board") or {}
+            plan.append(("refine", refine_spec,
+                         refine_node.get("pose_topic", DEFAULT_REFINE_TOPIC),
+                         0))
+
+        channels = []
+        for name, spec, topic, override in plan:
+            channels.append(BoardChannel(
+                name, spec, self._min_markers_for(name, spec, override), topic,
+                self.create_publisher(PoseStamped, topic, CONTRACT_QOS),
+                self.get_logger()))
+        return channels
+
+    def _min_markers_for(self, name, spec, override):
+        """How many markers must decode before this board's pose is published.
+
+        A positive override wins; zero (the default) follows the shape already
+        described in `config/board.yaml`. Deriving it rather than asking for it
+        keeps one source of truth: a leftover constant from the other shape
+        fails in a disguise.
+        """
+        if override > 0:
+            return override
+        derived = spec.auto_min_markers
+        total = spec.markers_x * spec.markers_y
         self.get_logger().info(
-            f"min_markers not set, following board.yaml: "
-            f"{self.spec.markers_x}x{self.spec.markers_y} board, "
+            f"{name}: min_markers not set, following board.yaml: "
+            f"{spec.markers_x}x{spec.markers_y} board, "
             f"need >= {derived} of {total} markers")
         return derived
 
@@ -383,10 +527,13 @@ class MarkerLocator(Node):
         mode = (f"publishing in '{self.target_frame}'"
                 if self.target_frame else
                 f"publishing in '{self.camera_frame}' (no robot needed)")
-        self.get_logger().info(f"{self.spec}")
         self.get_logger().info(f"camera {self.device} @ "
                                f"{self.frame_size[0]}x{self.frame_size[1]}, "
                                f"{mode}")
+        for channel in self.channels:
+            self.get_logger().info(
+                f"{channel.name}: {channel.spec}  ->  {channel.topic}, "
+                f"markers >= {channel.min_markers}")
         # Printing the field of view rather than only the focal length, because
         # the field of view is the number that can be checked against physics.
         # A 16 degree lens on a webcam bracket is visibly impossible; an
@@ -397,7 +544,7 @@ class MarkerLocator(Node):
                 f"{self.intrinsics.vertical_fov_deg:.1f} deg, "
                 f"fx={self.intrinsics.fx:.1f} fy={self.intrinsics.fy:.1f}")
         self.get_logger().info(
-            f"gates: markers >= {self.min_markers}, rms <= {self.max_reproj} px, "
+            f"gates: rms <= {self.max_reproj} px, "
             f"{self.min_distance}-{self.max_distance} m"
             + (", arm stationary" if (self.require_stationary
                                       and self.target_frame) else ""))
@@ -417,29 +564,24 @@ class MarkerLocator(Node):
                 self.get_logger().info("warm-up done, detecting")
             return
 
-        result = detect(frame, self.intrinsics.camera_matrix,
-                        self.intrinsics.dist_coeffs, self.spec,
-                        detector=self.detector, min_markers=self.min_markers)
-        if result is None:
-            self.reject(f"no board (need {self.min_markers} markers)")
-            return
-        if result.reproj_rms_px > self.max_reproj:
-            self.reject(f"reprojection rms {result.reproj_rms_px:.2f} px is "
-                        f"above {self.max_reproj}")
-            return
-        if not self.min_distance <= result.distance <= self.max_distance:
-            self.reject(f"board at {result.distance * 100:.1f} cm is outside "
-                        f"{self.min_distance * 100:.0f}-"
-                        f"{self.max_distance * 100:.0f} cm")
-            return
+        seen = []
+        for channel in self.channels:
+            result = channel.look(frame, self.intrinsics)
+            verdict = channel.gate(result, self.max_reproj,
+                                   self.min_distance, self.max_distance)
+            if verdict is not None:
+                channel.reject(*verdict)
+                continue
+            matrix, frame_id = self.to_target_frame(result)
+            if matrix is None:
+                continue        # to_target_frame has already said why
+            channel.publish(matrix, frame_id, self.get_clock())
+            channel.accept()
+            seen.append((channel, result))
 
-        matrix, frame_id = self.to_target_frame(result)
-        if matrix is None:
-            return
-
-        self.publish_pose(matrix, frame_id)
-        self.publish_debug(frame, result)
-        self.accept()
+        if seen:
+            self.accept()
+        self.publish_debug(frame, seen)
 
     def to_target_frame(self, result):
         """(4x4 in the output frame, its name), or (None, '') with a reason."""
@@ -465,35 +607,25 @@ class MarkerLocator(Node):
 
     # -- output ------------------------------------------------------------
 
-    def publish_pose(self, matrix, frame_id):
-        qx, qy, qz, qw = quaternion_from_matrix(matrix[:3, :3])
-        message = PoseStamped()
-        message.header.stamp = self.get_clock().now().to_msg()
-        message.header.frame_id = frame_id
-        message.pose.position.x = float(matrix[0, 3])
-        message.pose.position.y = float(matrix[1, 3])
-        message.pose.position.z = float(matrix[2, 3])
-        message.pose.orientation.x = qx
-        message.pose.orientation.y = qy
-        message.pose.orientation.z = qz
-        message.pose.orientation.w = qw
-        self.pose_publisher.publish(message)
-        self._published += 1
-        if self._published == 1:
-            t = matrix[:3, 3]
-            self.get_logger().info(
-                f"board at ({t[0]:+.4f}, {t[1]:+.4f}, {t[2]:+.4f}) m in "
-                f"'{frame_id}'")
-
-    def publish_debug(self, frame, result):
-        if not self.want_debug:
+    def publish_debug(self, frame, seen):
+        if not self.want_debug or not seen:
             return
         now = time.monotonic()
         if now - self._last_debug < self.debug_period:
             return
         self._last_debug = now
-        annotated = annotate(frame, result, self.intrinsics.camera_matrix,
-                             self.intrinsics.dist_coeffs)
+        # Drawn one over the other rather than one instead of the other: seeing
+        # both boards in the same picture is the point of this view. It is the
+        # only place a mis-solved refined board becomes visible at all, because
+        # a mirrored single marker solves to a confident pose at a fraction of
+        # a pixel.
+        annotated = frame
+        for row, (channel, result) in enumerate(seen):
+            annotated = annotate(annotated, result,
+                                 self.intrinsics.camera_matrix,
+                                 self.intrinsics.dist_coeffs,
+                                 label=f"{channel.name} ",
+                                 text_origin=(10, 28 + 26 * row))
         ok, buffer = cv2.imencode(".jpg", annotated,
                                   [int(cv2.IMWRITE_JPEG_QUALITY),
                                    DEBUG_JPEG_QUALITY])

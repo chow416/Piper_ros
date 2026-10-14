@@ -79,6 +79,20 @@ bool readPressParamsFile(const rclcpp::Node::SharedPtr& node,
       return fallback;
     }
   };
+  const auto integer = [&](const YAML::Node& root, const char* key,
+                           int fallback) {
+    const YAML::Node value = root[key];
+    if (!value) {
+      return fallback;
+    }
+    try {
+      return value.as<int>();
+    } catch (const YAML::Exception& exception) {
+      RCLCPP_ERROR(node->get_logger(), "%s: %s: %s", path.c_str(), key,
+                   exception.what());
+      return fallback;
+    }
+  };
   try {
     const YAML::Node root = YAML::Load(stream);
     if (!root.IsMap()) {
@@ -93,6 +107,16 @@ bool readPressParamsFile(const rclcpp::Node::SharedPtr& node,
     out->contact_standoff =
         number(root, "contact_standoff_m", out->contact_standoff);
     out->press_depth = number(root, "press_depth", out->press_depth);
+    out->refine_rounds =
+        integer(root, "max_refinement_rounds", out->refine_rounds);
+    out->refine_wait_timeout_s =
+        number(root, "refine_wait_timeout_s", out->refine_wait_timeout_s);
+    out->refine_fusion_weight =
+        number(root, "refine_fusion_weight", out->refine_fusion_weight);
+    out->refine_max_correction_m =
+        number(root, "refine_max_correction_m", out->refine_max_correction_m);
+    out->refine_max_angle_deg =
+        number(root, "refine_max_angle_deg", out->refine_max_angle_deg);
   } catch (const YAML::Exception& exception) {
     RCLCPP_ERROR(node->get_logger(), "%s: %s", path.c_str(), exception.what());
     return false;
@@ -132,8 +156,8 @@ bool validatePressParameters(const rclcpp::Node::SharedPtr& node,
     return false;
   }
   if (!std::isfinite(parameters.press_depth) ||
-      parameters.press_depth <= 0.0 || parameters.press_depth > 0.015) {
-    RCLCPP_ERROR(node->get_logger(), "press_depth must be in (0, 0.015] m");
+      parameters.press_depth <= 0.0 || parameters.press_depth > 0.050) {
+    RCLCPP_ERROR(node->get_logger(), "press_depth must be in (0, 0.050] m");
     return false;
   }
   parameters.press_direction.normalize();

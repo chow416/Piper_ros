@@ -14,12 +14,68 @@
 
 namespace piper_elevator_manipulation {
 
-int executePressSequence(
-    const rclcpp::Node::SharedPtr& node,
-    const PressTaskParameters& parameters,
-    const PlanningTask& planning_task,
-    JointStateCache& joint_states,
-    bool require_contact) {
+namespace {
+
+//: Phase names as they appear in the MTC solution; `press_solution.cpp` is what
+//: turns the stage tree into that ordered list. Named rather than written out
+//: because the split below is defined by two of them, and a typo in one of the
+//: two comparisons would silently move the boundary instead of failing.
+constexpr char kAdvanceStage[] = "advance to button contact";
+constexpr char kPressStage[] = "press button";
+constexpr char kRetreatStage[] = "retreat to pre-press waypoint";
+constexpr char kReturnStage[] = "return to captured start state";
+
+}  // namespace
+
+int runToPrePress(const rclcpp::Node::SharedPtr& node,
+                  const PlanningTask& planning_task,
+                  JointStateCache& joint_states) {
+  std::vector<PlannedMotion> motions;
+  collectMotions(*planning_task.task->solutions().front(), &motions);
+  piper_elevator_manipulation::TrajectoryExecutor executor(node);
+
+  const PlannedMotion* last_executed = nullptr;
+  for (const auto& motion : motions) {
+    // Stops at the approach, not at the press. If the aim is going to be
+    // corrected, the correction has to land before the arm commits to the
+    // contact line -- and it has to be observed while the camera can still see
+    // anything, which is this pose and no later one.
+    if (motion.stage_name == kAdvanceStage ||
+        motion.stage_name == kPressStage) {
+      break;
+    }
+    if (motion.stage_name == kRetreatStage ||
+        motion.stage_name == kReturnStage) {
+      throw std::runtime_error("MTC solution has an unexpected phase order");
+    }
+    RCLCPP_INFO(node->get_logger(), "Executing phase: %s (planned %.2f s)",
+                motion.stage_name.c_str(), plannedSeconds(motion.trajectory));
+    const auto result = executor.execute(
+        motion.trajectory, motionTimeout(motion.trajectory));
+    if (result.status !=
+        piper_elevator_manipulation::ExecutionStatus::completed) {
+      RCLCPP_ERROR(node->get_logger(), "CONTROLLER_FAILED at %s: %s",
+                   motion.stage_name.c_str(), result.detail.c_str());
+      return 1;
+    }
+    last_executed = &motion;
+  }
+
+  // Hand back a settled arm. A second observation taken while the arm is still
+  // moving carries the motion as pose error, and with no hardware capture
+  // timestamp there is nothing later that can take it back out.
+  if (last_executed != nullptr) {
+    waitForSettledJoints(node, joint_states, last_executed->trajectory,
+                         "pre-press");
+  }
+  return 0;
+}
+
+int executeFromPrePress(const rclcpp::Node::SharedPtr& node,
+                        const PressTaskParameters& parameters,
+                        const PlanningTask& planning_task,
+                        JointStateCache& joint_states,
+                        bool require_contact) {
   std::vector<PlannedMotion> motions;
   collectMotions(*planning_task.task->solutions().front(), &motions);
   piper_elevator_manipulation::TrajectoryExecutor executor(node);
@@ -33,17 +89,26 @@ int executePressSequence(
       parameters.press_direction, std::chrono::milliseconds(250));
 
   bool approach_completed = false;
+  bool reached_approach = false;
   const PlannedMotion* press_motion = nullptr;
   const PlannedMotion* approach_motion = nullptr;
   for (const auto& motion : motions) {
-    if (motion.stage_name == "press button") {
+    if (motion.stage_name == kPressStage) {
       press_motion = &motion;
       break;
     }
-    if (motion.stage_name == "retreat to pre-press waypoint" ||
-        motion.stage_name == "return to captured start state") {
+    if (motion.stage_name == kRetreatStage ||
+        motion.stage_name == kReturnStage) {
       throw std::runtime_error("MTC solution has an unexpected phase order");
     }
+    // The free-motion phases are behind us -- `runToPrePress` already ran them
+    // and the arm is standing at the approach pose. Skipping rather than
+    // repeating them is what makes the split a split: re-running would drag the
+    // arm back to the start of the route and forward again.
+    if (!reached_approach && motion.stage_name != kAdvanceStage) {
+      continue;
+    }
+    reached_approach = true;
     RCLCPP_INFO(node->get_logger(), "Executing phase: %s (planned %.2f s)",
                 motion.stage_name.c_str(), plannedSeconds(motion.trajectory));
     const auto result = executor.execute(
@@ -54,8 +119,8 @@ int executePressSequence(
                    motion.stage_name.c_str(), result.detail.c_str());
       return 1;
     }
-    approach_completed |= motion.stage_name == "advance to button contact";
-    if (motion.stage_name == "advance to button contact") {
+    approach_completed |= motion.stage_name == kAdvanceStage;
+    if (motion.stage_name == kAdvanceStage) {
       approach_motion = &motion;
     }
   }

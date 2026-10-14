@@ -258,6 +258,55 @@ class BoardSpec:
                 f"{self.width * 1000:.1f}x{self.height * 1000:.1f}mm)")
 
 
+def board_specs_from_config(data):
+    """(coarse, refine) from a parsed `board.yaml` mapping.
+
+    `coarse` is the `board:` section that has always been there. `refine` is the
+    optional `refine_board:` section, and is None for a deployment that has only
+    one board -- the single-board case stays a supported configuration rather
+    than a special case.
+
+    The two boards are separable only because their `accepted_ids` do not
+    overlap. That is not a convention to keep in mind, it is the load-bearing
+    assumption behind running two solves over one frame: an id claimed by both
+    appears in both object-point tables, both solves accept it, and each board
+    silently gains a marker that is not physically on it -- which enters PnP as
+    a wrong-length baseline and comes out as a plausible pose at the wrong
+    place. Checking it here means a copy-paste mistake stops the node instead of
+    producing a confident wrong answer.
+    """
+    if not isinstance(data, dict):
+        raise ValueError("board.yaml root must be a mapping")
+
+    coarse = BoardSpec.from_dict(data)
+
+    node = data.get("refine_board")
+    if node is None:
+        return coarse, None
+    if not isinstance(node, dict) or not node:
+        raise ValueError(
+            "refine_board is present but empty. Remove it for a single-board "
+            "deployment, or fill in its geometry.")
+    refine = BoardSpec.from_dict(node)
+
+    if coarse.accepted_ids is not None and refine.accepted_ids is not None:
+        shared = sorted(set(coarse.accepted_ids) & set(refine.accepted_ids))
+        if shared:
+            raise ValueError(
+                f"board and refine_board both claim marker id(s) {shared}. "
+                f"Two boards are only separable when their accepted_ids are "
+                f"disjoint: with an overlap both solves take the same marker, "
+                f"and each board then has one that is not on it.")
+
+    return coarse, refine
+
+
+def board_specs_from_yaml(path):
+    import yaml
+    with open(path, encoding="utf-8") as handle:
+        return board_specs_from_config(yaml.safe_load(handle) or {})
+
+
 class BoardDetection:
     """One successful detection.
 
@@ -391,13 +440,16 @@ def detect(image, camera_matrix, dist_coeffs, spec, detector=None,
 
 
 def annotate(image, detection, camera_matrix, dist_coeffs, axis_length=None,
-             thickness=2):
+             thickness=2, label="", text_origin=(10, 28)):
     """Return a copy of `image` with corners, frame axes, and markers drawn.
 
     The axes are the board frame, so the red arrow points along board +X, green
     along +Y and blue along +Z -- i.e. blue should point at the camera when the
     board is facing it. That is the quickest visual check that the board has not
     been mounted face-down.
+
+    `label` goes in front of the summary line and `text_origin` moves it, so
+    two boards drawn into the same frame do not overprint each other.
     """
     out = image.copy()
     if detection is None:
@@ -414,12 +466,12 @@ def annotate(image, detection, camera_matrix, dist_coeffs, axis_length=None,
     cv2.drawFrameAxes(out, camera_matrix, dist_coeffs,
                       detection.rvec, detection.tvec, axis_length, thickness)
 
-    text = (f"markers {len(detection.marker_ids)}  "
+    text = (f"{label}markers {len(detection.marker_ids)}  "
             f"rms {detection.reproj_rms_px:.2f}px  "
             f"d {detection.distance * 100:.1f}cm")
-    cv2.putText(out, text, (10, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.7,
+    cv2.putText(out, text, text_origin, cv2.FONT_HERSHEY_SIMPLEX, 0.7,
                 (0, 0, 0), 4, cv2.LINE_AA)
-    cv2.putText(out, text, (10, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.7,
+    cv2.putText(out, text, text_origin, cv2.FONT_HERSHEY_SIMPLEX, 0.7,
                 (255, 255, 255), 1, cv2.LINE_AA)
     return out
 
