@@ -23,6 +23,8 @@
   <exec_depend>piper_press_moveit</exec_depend>
   <exec_depend>moveit_configs_utils</exec_depend>
 
+  <test_depend>ament_cmake_pytest</test_depend>
+
   <export>
     <build_type>ament_cmake</build_type>
   </export>

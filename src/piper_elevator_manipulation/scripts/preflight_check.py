@@ -27,8 +27,10 @@ disturb the arm.
 
 import argparse
 import os
+import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 # /proc/<pid>/comm holds the executable name, truncated to 15 characters, so
@@ -125,12 +127,64 @@ def can_interface_state(name):
     return "up" if flags & IFF_UP else "down"
 
 
+def read_can_rx_packets(name):
+    """Read the kernel RX packet counter for one CAN interface."""
+    try:
+        return int(Path(
+            f"/sys/class/net/{name}/statistics/rx_packets").read_text().strip())
+    except (OSError, ValueError):
+        return None
+
+
+def can_receives_frames(name, sample_seconds=0.25):
+    """Return whether the CAN RX counter advances during a short sample."""
+    before = read_can_rx_packets(name)
+    time.sleep(sample_seconds)
+    after = read_can_rx_packets(name)
+    live = before is not None and after is not None and after > before
+    return live, before, after
+
+
+ANSI_ESCAPE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+
+
+def parse_hardware_component_state(output, component_name):
+    """Extract a ros2_control hardware state from list-components output."""
+    clean = ANSI_ESCAPE.sub("", output)
+    current_name = None
+    for line in clean.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("name:"):
+            current_name = stripped.split(":", 1)[1].strip()
+        elif current_name == component_name and stripped.startswith("state:"):
+            match = re.search(r"\blabel=([^\s]+)", stripped)
+            return match.group(1) if match else None
+    return None
+
+
+def hardware_component_state(component_name):
+    """Ask controller_manager for one hardware component's lifecycle state."""
+    try:
+        completed = subprocess.run(
+            ["ros2", "control", "list_hardware_components", "-v"],
+            capture_output=True, text=True, timeout=15)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if completed.returncode != 0:
+        return None
+    return parse_hardware_component_state(completed.stdout, component_name)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Check for stale or duplicated ROS processes before a run.")
     parser.add_argument("--can", default="can0")
     parser.add_argument("--skip-topic-check", action="store_true",
                         help="skip the /joint_states publisher count")
+    parser.add_argument("--skip-can-traffic-check", action="store_true",
+                        help="skip the short live CAN RX counter sample")
+    parser.add_argument("--skip-hardware-check", action="store_true",
+                        help="skip the PiperSystem lifecycle-state query")
     arguments = parser.parse_args()
 
     found = scan_processes()
@@ -167,6 +221,31 @@ def main():
             "    prints `Arm feedback received`.")
     else:
         print(f"  {arguments.can}: up")
+        if not arguments.skip_can_traffic_check:
+            live, before, after = can_receives_frames(arguments.can)
+            delta = None if before is None or after is None else after - before
+            if live:
+                print(f"  live RX: yes (+{delta} packets / 0.25 s)")
+            else:
+                print(f"  live RX: NO (counter {before} -> {after})")
+                problems.append(
+                    f"{arguments.can} is UP but receives no live frames. The "
+                    "USB-CAN interface may be stalled; restart can0 (or replug "
+                    "the adapter), then verify candump before any motion")
+
+    controller_managers = len(found.get("ros2_control_no", []))
+    if not arguments.skip_hardware_check and controller_managers == 1:
+        print()
+        print("=== ros2_control hardware ===")
+        hardware_state = hardware_component_state("PiperSystem")
+        if hardware_state == "active":
+            print("  PiperSystem: active")
+        else:
+            print(f"  PiperSystem: {hardware_state or 'unavailable'}  <-- NOT READY")
+            problems.append(
+                "PiperSystem is not active. Do not publish a trajectory: stop "
+                "the stale bringup and start piper_real_bringup again after "
+                "live CAN feedback has recovered")
 
     if not arguments.skip_topic_check:
         print()

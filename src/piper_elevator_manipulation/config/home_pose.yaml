@@ -81,7 +81,8 @@
 #            jitter dropped to 0.07/0.34/0.53 mm peak to peak.
 #   0.5091   board had moved again. Only IDs 6, 7, 8 decoded, at 30 px from the
 #            *top* edge, which puts the centre about 28.6 deg *above* the axis.
-#            The wrist is raised to follow it.
+#            The wrist is raised to follow it. This is the value in the old J5
+#            encoder coordinate system; see the zero-point rebase below.
 #
 # The lesson from doing this three times: this number is not a property of the
 # robot, it is a property of where the board happens to be standing. Re-measure
@@ -92,6 +93,11 @@
 # joint5 is the right knob and joint2 is not. joint2 sits a hair off a stop
 # whose limit is >= 0, so its only free direction is *up*, and up swings the
 # camera *away* from the board.
+#
+# On 2026-10-16 J5 was reset with the vendor tool. After checking the real arm
+# in its current zero convention, 0.5091 rad was selected as the task-home wrist
+# attitude that appears level. This is deliberately a task-home tuning value,
+# not a new mechanical-zero setting; do not change the vendor zero to tune it.
 #
 # ⚠️ Home is also the seed the press plans from. If the press starts failing 5D
 # IK from 'captured start state', this is the first thing to revisit.
@@ -104,4 +110,4 @@ home_pose:
   joint2:  0.0105   # ⚠️ 刻意低于建议区间下限：为相机视野，见上方说明
   joint3: -0.4215
   joint4:  0.0000
-  joint5:  0.5091   # 对准标定板 —— 五个值里唯一随板子实际位置变的
+  joint5:  0.5091   # 当前机械零点下，本轮验证的水平任务初始姿态

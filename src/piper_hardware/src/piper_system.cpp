@@ -19,6 +19,7 @@ constexpr char kLoggerName[] = "PiperSystem";
 // Piper CAN identifiers. Values were verified against piper_sdk and against a
 // live arm on can0: 0x2A5/0x2A6/0x2A7 carry joint angles, 0x2A2..0x2A4 carry
 // the end-effector pose, and the 0x155..0x157 family carries joint commands.
+constexpr uint32_t kCanIdMotionCtrl1 = 0x150;    // emergency-stop / teach control
 constexpr uint32_t kCanIdMotionCtrl2 = 0x151;    // mode, enable, speed ratio
 constexpr uint32_t kCanIdJointCtrl12 = 0x155;    // joint1, joint2
 constexpr uint32_t kCanIdJointCtrl34 = 0x156;    // joint3, joint4
@@ -29,13 +30,20 @@ constexpr uint32_t kCanIdJointFeedback12 = 0x2A5;
 constexpr uint32_t kCanIdJointFeedback34 = 0x2A6;
 constexpr uint32_t kCanIdJointFeedback56 = 0x2A7;
 constexpr uint32_t kCanIdGripperFeedback = 0x2A8;
+constexpr uint32_t kCanIdLowSpeedFeedbackFirst = 0x261;
+constexpr uint32_t kCanIdLowSpeedFeedbackLast = 0x266;
 
 constexpr uint8_t kCtrlModeCanCommand = 0x01;
 constexpr uint8_t kMoveModeJoint = 0x01;
 constexpr uint8_t kMitModePositionVelocity = 0x00;
+// The installed Piper V2 SDK's EnablePiper() handshake repeatedly sends 0x07
+// and the live arm confirms every joint enabled. Keep this firmware-specific
+// selector rather than trusting the contradictory generic message comment.
 constexpr uint8_t kMotorAllJoints = 0x07;
 constexpr uint8_t kEnableFlagDisable = 0x01;
 constexpr uint8_t kEnableFlagEnable = 0x02;
+constexpr uint8_t kEmergencyStopResume = 0x02;
+constexpr uint8_t kDriverEnableStatusBit = 0x40;
 
 constexpr double kRadToMilliDeg = 1000.0 * 180.0 / M_PI;
 constexpr double kMilliDegToRad = M_PI / (1000.0 * 180.0);
@@ -46,6 +54,7 @@ double radiansToDegrees(double radians) { return radians * 180.0 / M_PI; }
 // activation. Activation runs outside the real-time loop, so a short block is
 // acceptable; without this the first command would be sent blind.
 constexpr double kActivationFeedbackTimeoutSeconds = 3.0;
+constexpr double kMotorEnableTimeoutSeconds = 2.0;
 
 // The Piper protocol is big-endian on the wire. piper_sdk encodes commands with
 // struct.pack(">i", value) and decodes feedback with int.from_bytes(..., "big"),
@@ -220,6 +229,7 @@ void PiperSystem::stopBus() {
   can_.close();
   bus_open_ = false;
   feedback_healthy_ = false;
+  motor_enabled_feedback_.fill(false);
 }
 
 void PiperSystem::pollFeedback() {
@@ -246,6 +256,14 @@ void PiperSystem::pollFeedback() {
         last_feedback_time_ = std::chrono::steady_clock::now();
         break;
       default:
+        if (frame.id >= kCanIdLowSpeedFeedbackFirst &&
+            frame.id <= kCanIdLowSpeedFeedbackLast && frame.length >= 6) {
+          const auto motor = static_cast<std::size_t>(
+              frame.id - kCanIdLowSpeedFeedbackFirst);
+          motor_enabled_feedback_[motor] =
+              (frame.data[5] & kDriverEnableStatusBit) != 0;
+          last_feedback_time_ = std::chrono::steady_clock::now();
+        }
         break;
     }
   }
@@ -285,20 +303,65 @@ bool PiperSystem::seedFromHardware(std::string* error) {
 bool PiperSystem::setMotorsEnabled(bool enabled, std::string* error) {
   PiperCan::Frame frame;
   frame.id = kCanIdMotorEnable;
-  frame.length = 2;
+  // Piper's decoder requires the fixed eight-byte control-frame DLC; unused
+  // bytes remain zero from PiperCan::Frame's value initialization.
+  frame.length = 8;
   frame.data[0] = kMotorAllJoints;
   frame.data[1] = enabled ? kEnableFlagEnable : kEnableFlagDisable;
   if (!can_.write(frame, error)) {
     return false;
   }
-  motors_enabled_ = enabled;
+  if (!enabled) {
+    motors_enabled_ = false;
+  }
   return true;
+}
+
+bool PiperSystem::sendEmergencyStopResume(std::string* error) {
+  PiperCan::Frame frame;
+  frame.id = kCanIdMotionCtrl1;
+  frame.length = 8;
+  frame.data[0] = kEmergencyStopResume;
+  return can_.write(frame, error);
+}
+
+bool PiperSystem::motorsAllEnabled() const {
+  return std::all_of(motor_enabled_feedback_.begin(), motor_enabled_feedback_.end(),
+                     [](bool enabled) { return enabled; });
+}
+
+bool PiperSystem::enableMotorsAndConfirm(
+    const std::array<double, kPiperJointCount>& hold,
+    std::string* error) {
+  const auto deadline = std::chrono::steady_clock::now() +
+                        std::chrono::duration<double>(kMotorEnableTimeoutSeconds);
+  while (std::chrono::steady_clock::now() < deadline) {
+    // This firmware revision resets its active target to all-zero whenever an
+    // enable request arrives. Restore MOVE_J and the measured-pose target
+    // immediately after every request, before waiting for feedback.
+    if (!setMotorsEnabled(true, error)) {
+      return false;
+    }
+    if (!sendMotionMode(error) || !sendJointCommand(hold, error)) {
+      return false;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    pollFeedback();
+  }
+  if (motorsAllEnabled()) {
+    motors_enabled_ = true;
+    return true;
+  }
+  *error = "the Piper firmware did not confirm all joint motors enabled within " +
+           std::to_string(kMotorEnableTimeoutSeconds) + " s";
+  return false;
 }
 
 bool PiperSystem::sendMotionMode(std::string* error) {
   PiperCan::Frame frame;
   frame.id = kCanIdMotionCtrl2;
-  frame.length = 6;
+  // Match the vendor SDK's zero-padded eight-byte 0x151 frame.
+  frame.length = 8;
   frame.data[0] = kCtrlModeCanCommand;
   frame.data[1] = kMoveModeJoint;
   frame.data[2] = static_cast<uint8_t>(command_speed_ratio_);
@@ -361,6 +424,8 @@ hardware_interface::CallbackReturn PiperSystem::on_activate(
     }
   }
 
+  const std::array<double, kPiperJointCount> hold = measured_radians_;
+
   RCLCPP_INFO(rclcpp::get_logger(kLoggerName),
               "Arm feedback received. Current joint angles (deg): %.3f %.3f %.3f %.3f %.3f %.3f",
               radiansToDegrees(measured_radians_[0]), radiansToDegrees(measured_radians_[1]),
@@ -381,17 +446,26 @@ hardware_interface::CallbackReturn PiperSystem::on_activate(
     }
   }
 
-  if (!sendMotionMode(&error)) {
+  if (!sendEmergencyStopResume(&error)) {
     RCLCPP_ERROR(rclcpp::get_logger(kLoggerName),
-                 "Failed to request CAN joint mode: %s", error.c_str());
+                 "Failed to request emergency-stop resume: %s", error.c_str());
+    stopBus();
+    return hardware_interface::CallbackReturn::ERROR;
+  }
+
+  // Preload the current-pose target before enabling. Some firmware revisions
+  // immediately act on their default zero target as soon as the drives enable.
+  if (!sendMotionMode(&error) || !sendJointCommand(hold, &error)) {
+    RCLCPP_ERROR(rclcpp::get_logger(kLoggerName),
+                 "Failed to preload the current-pose hold: %s", error.c_str());
     stopBus();
     return hardware_interface::CallbackReturn::ERROR;
   }
 
   if (enable_motors_on_activate_) {
-    if (!setMotorsEnabled(true, &error)) {
+    if (!enableMotorsAndConfirm(hold, &error)) {
       RCLCPP_ERROR(rclcpp::get_logger(kLoggerName),
-                   "Failed to enable the motors: %s", error.c_str());
+                   "Failed to enable and confirm the motors: %s", error.c_str());
       stopBus();
       return hardware_interface::CallbackReturn::ERROR;
     }
@@ -404,9 +478,9 @@ hardware_interface::CallbackReturn PiperSystem::on_activate(
                 "arm stays limp.");
   }
 
-  // Send the holding command once so the first controller cycle is a no-op.
-  std::array<double, kPiperJointCount> hold = measured_radians_;
-  if (!sendJointCommand(hold, &error)) {
+  // The final enable request may reset the firmware's command mode. Restore
+  // both mode and hold once more before ros2_control starts its update loop.
+  if (!sendMotionMode(&error) || !sendJointCommand(hold, &error)) {
     RCLCPP_ERROR(rclcpp::get_logger(kLoggerName),
                  "Failed to send the initial hold command: %s", error.c_str());
     stopBus();

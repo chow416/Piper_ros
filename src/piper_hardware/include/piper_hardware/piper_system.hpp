@@ -81,6 +81,11 @@ class PiperSystem final : public hardware_interface::SystemInterface {
 
   bool seedFromHardware(std::string* error);
   bool setMotorsEnabled(bool enabled, std::string* error);
+  bool sendEmergencyStopResume(std::string* error);
+  bool enableMotorsAndConfirm(
+      const std::array<double, kPiperJointCount>& hold,
+      std::string* error);
+  [[nodiscard]] bool motorsAllEnabled() const;
   bool sendMotionMode(std::string* error);
   bool sendJointCommand(const std::array<double, kPiperJointCount>& radians,
                         std::string* error);
@@ -113,6 +118,7 @@ class PiperSystem final : public hardware_interface::SystemInterface {
   std::array<double, kPiperJointCount> measured_radians_{};
   std::array<double, kPiperJointCount> previous_measured_radians_{};
   std::array<bool, kPiperJointCount> measured_valid_{};
+  std::array<bool, kPiperJointCount> motor_enabled_feedback_{};
   bool has_previous_measurement_{false};
 
   PiperCan can_;

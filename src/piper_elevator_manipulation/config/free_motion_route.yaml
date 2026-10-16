@@ -33,9 +33,12 @@ piper_press_button_demo:
       # the single knob for how fast untethered free motion runs.
       velocity_scaling: 0.20
       acceleration_scaling: 0.20
+      # J5 was rebased after its vendor mechanical zero was reset. Subtracting
+      # the same 0.2705 rad used by home_pose.yaml preserves this waypoint's
+      # physical wrist attitude in the new encoder coordinate system.
       clearance:
         joint1: 0.0
         joint2: 0.15
         joint3: -0.15
         joint4: 0.0
-        joint5: 0.0
+        joint5: -0.2705

@@ -40,7 +40,12 @@ install(FILES README.md DESTINATION share/${PROJECT_NAME})
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
+  find_package(Python3 REQUIRED COMPONENTS Interpreter)
   ament_lint_auto_find_test_dependencies()
+  add_test(
+    NAME motor_enable_protocol_test
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/motor_enable_protocol_test.py
+  )
 endif()
 
 ament_export_include_directories(include)
