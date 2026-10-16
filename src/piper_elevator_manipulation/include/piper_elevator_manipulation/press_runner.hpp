@@ -48,6 +48,13 @@ struct RefinementParams {
   //: watched: it is one number that says whether the solve went wild, and a
   //: single marker can produce a wild one while its position still looks sane.
   double max_angle_deg{10.0};
+  //: Minimum age of a refined observation relative to the moment the arm
+  //: settled. The camera has no hardware exposure stamp, so the locator's
+  //: publish stamp stands in for the capture time; the guard has to cover the
+  //: capture-to-publish pipeline delay, or a frame shot while the arm was
+  //: still moving would be consumed after it stopped and carry the motion as
+  //: pose error.
+  double static_guard_s{0.3};
 };
 
 // Waits for one accepted target, reporting rejected messages as they pile up so

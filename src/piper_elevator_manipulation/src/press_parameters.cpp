@@ -117,6 +117,8 @@ bool readPressParamsFile(const rclcpp::Node::SharedPtr& node,
         number(root, "refine_max_correction_m", out->refine_max_correction_m);
     out->refine_max_angle_deg =
         number(root, "refine_max_angle_deg", out->refine_max_angle_deg);
+    out->refine_static_guard_s =
+        number(root, "refine_static_guard_s", out->refine_static_guard_s);
   } catch (const YAML::Exception& exception) {
     RCLCPP_ERROR(node->get_logger(), "%s: %s", path.c_str(), exception.what());
     return false;

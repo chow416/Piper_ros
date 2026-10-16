@@ -287,7 +287,12 @@ class PressTargetBridge(Node):
 
         qx, qy, qz, qw = quaternion_for_direction(direction)
         message = PoseStamped()
-        message.header.stamp = self.get_clock().now().to_msg()
+        # Carry the *locator's* publish stamp through instead of re-stamping
+        # with the bridge clock. The task's refinement step rejects
+        # observations that were published before the arm settled, and a
+        # re-stamp here would forge freshness on a frame the camera shot
+        # while the arm was still moving.
+        message.header.stamp = self.board_stamp
         message.header.frame_id = self.frame
         message.pose.position.x = float(position[0])
         message.pose.position.y = float(position[1])

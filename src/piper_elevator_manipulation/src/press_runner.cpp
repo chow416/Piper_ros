@@ -90,10 +90,46 @@ RefinementOutcome refineOnce(const rclcpp::Node::SharedPtr& node,
               "Refine round %d/%d: waiting up to %.1f s on '%s'...",
               round + 1, refinement.rounds, refinement.wait_timeout_s,
               source.topic().c_str());
-  const auto observation = source.waitForTarget(std::chrono::milliseconds(
-      static_cast<int64_t>(std::llround(refinement.wait_timeout_s * 1000.0))));
+  // The arm was settled before this call (runToPrePress hands back a settled
+  // arm), so everything from this moment on is, as far as the motion goes,
+  // safe to observe. The camera has no hardware exposure stamp, so the
+  // locator's publish stamp stands in for the capture time and the guard
+  // covers the capture-to-publish delay. Anything published before
+  // `t_stop + guard` may have been *captured* while the arm was still moving,
+  // and a pose error that arrived through motion cannot be taken back out
+  // afterwards.
+  const rclcpp::Time t_stop = node->now();
+  const rclcpp::Time deadline =
+      t_stop + rclcpp::Duration::from_seconds(refinement.wait_timeout_s);
+  std::optional<PressTarget> observation;
+  std::size_t dropped_pre_settle{0};
+  while (node->now() < deadline) {
+    const auto remaining = deadline - node->now();
+    auto candidate = source.waitForTarget(
+        std::chrono::milliseconds(std::max<int64_t>(1, remaining.nanoseconds() / 1000000)));
+    if (!candidate.has_value()) {
+      break;  // timed out on the refine channel
+    }
+    const rclcpp::Time capture_stamp = candidate->stamp;
+    if (capture_stamp >=
+        t_stop + rclcpp::Duration::from_seconds(refinement.static_guard_s)) {
+      observation = std::move(candidate);
+      break;
+    }
+    ++dropped_pre_settle;
+  }
+  if (dropped_pre_settle > 0) {
+    RCLCPP_WARN(node->get_logger(),
+                "Refine round %d/%d: discarded %zu observation(s) stamped "
+                "before the arm settled (+ %.1f s guard)",
+                round + 1, refinement.rounds, dropped_pre_settle,
+                refinement.static_guard_s);
+  }
   if (!observation.has_value()) {
-    outcome.reason = "no refined observation arrived in time";
+    outcome.reason = dropped_pre_settle > 0
+                         ? "no refined observation fresh enough after the arm "
+                           "settled arrived in time"
+                         : "no refined observation arrived in time";
     return outcome;
   }
 

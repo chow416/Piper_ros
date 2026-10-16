@@ -72,6 +72,7 @@ struct EditablePressParams {
   double refine_fusion_weight{0.5};
   double refine_max_correction_m{0.020};
   double refine_max_angle_deg{10.0};
+  double refine_static_guard_s{0.3};
 };
 
 // Reads a ROS parameter, declaring it with `default_value` when it does not

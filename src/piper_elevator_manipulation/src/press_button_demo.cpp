@@ -106,6 +106,8 @@ int main(int argc, char** argv) {
       getOrDeclareParameter(node, "refine_max_correction_m", 0.020);
   refinement.max_angle_deg =
       getOrDeclareParameter(node, "refine_max_angle_deg", 10.0);
+  refinement.static_guard_s =
+      getOrDeclareParameter(node, "refine_static_guard_s", 0.3);
   if (refinement.rounds < 0) {
     RCLCPP_ERROR(logger, "max_refinement_rounds must be 0 or more");
     rclcpp::shutdown();
@@ -218,6 +220,7 @@ int main(int argc, char** argv) {
       edited.refine_fusion_weight = refinement.fusion_weight;
       edited.refine_max_correction_m = refinement.max_correction_m;
       edited.refine_max_angle_deg = refinement.max_angle_deg;
+      edited.refine_static_guard_s = refinement.static_guard_s;
       if (readPressParamsFile(node, press_params_file, &edited)) {
         approach = edited.approach_distance;
         standoff = edited.contact_standoff;
@@ -227,6 +230,7 @@ int main(int argc, char** argv) {
         refine_now.fusion_weight = edited.refine_fusion_weight;
         refine_now.max_correction_m = edited.refine_max_correction_m;
         refine_now.max_angle_deg = edited.refine_max_angle_deg;
+        refine_now.static_guard_s = edited.refine_static_guard_s;
         params_source = press_params_file;
       }
     }
