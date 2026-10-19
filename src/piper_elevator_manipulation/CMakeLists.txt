@@ -72,6 +72,7 @@ if(BUILD_TESTING)
   ament_add_pytest_test(test_preflight_check test/test_preflight_check.py)
   ament_add_pytest_test(test_button_target_selector test/test_button_target_selector.py)
   ament_add_pytest_test(test_button_target_selector_ros test/test_button_target_selector_ros.py)
+  ament_add_pytest_test(test_semantic_hardware_launch test/test_semantic_hardware_launch.py)
 endif()
 
 ament_package()
