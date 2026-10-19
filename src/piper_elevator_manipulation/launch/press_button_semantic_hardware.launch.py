@@ -1,9 +1,12 @@
 """Run one hardware press from a fixed semantic perception target.
 
 This wrapper deliberately owns only the interface between perception and the
-existing press task.  Start the real arm/controller separately, and start the
-camera/perception pipeline separately; combining them here would hide their
-independent failure modes and make stale camera data look like a fresh task.
+existing press task.  It trusts the incoming ``base_link`` position but ignores
+the incoming orientation: a configured fixed panel normal supplies the press
+axis until camera calibration supports a measured normal. Start the real
+arm/controller separately, and start the camera/perception pipeline separately;
+combining them here would hide their independent failure modes and make stale
+camera data look like a fresh task.
 
 Example (after hardware bringup and perception are healthy)::
 
@@ -29,6 +32,9 @@ def generate_launch_description():
     max_age_s = LaunchConfiguration("max_age_s")
     future_tolerance_s = LaunchConfiguration("future_tolerance_s")
     reacquire_distance_m = LaunchConfiguration("reacquire_distance_m")
+    fixed_press_direction_x = LaunchConfiguration("fixed_press_direction_x")
+    fixed_press_direction_y = LaunchConfiguration("fixed_press_direction_y")
+    fixed_press_direction_z = LaunchConfiguration("fixed_press_direction_z")
     execute = LaunchConfiguration("execute")
     hardware_enable = LaunchConfiguration("hardware_enable")
     start_moveit = LaunchConfiguration("start_moveit")
@@ -56,6 +62,15 @@ def generate_launch_description():
                 ),
                 "reacquire_distance_m": ParameterValue(
                     reacquire_distance_m, value_type=float
+                ),
+                "fixed_press_direction_x": ParameterValue(
+                    fixed_press_direction_x, value_type=float
+                ),
+                "fixed_press_direction_y": ParameterValue(
+                    fixed_press_direction_y, value_type=float
+                ),
+                "fixed_press_direction_z": ParameterValue(
+                    fixed_press_direction_z, value_type=float
                 ),
             }
         ],
@@ -86,6 +101,21 @@ def generate_launch_description():
             DeclareLaunchArgument("max_age_s", default_value="0.5"),
             DeclareLaunchArgument("future_tolerance_s", default_value="0.05"),
             DeclareLaunchArgument("reacquire_distance_m", default_value="0.04"),
+            DeclareLaunchArgument(
+                "fixed_press_direction_x",
+                default_value="1.0",
+                description="base_link X component of the fixed inward panel normal.",
+            ),
+            DeclareLaunchArgument(
+                "fixed_press_direction_y",
+                default_value="0.0",
+                description="base_link Y component of the fixed inward panel normal.",
+            ),
+            DeclareLaunchArgument(
+                "fixed_press_direction_z",
+                default_value="0.0",
+                description="base_link Z component of the fixed inward panel normal.",
+            ),
             DeclareLaunchArgument("execute", default_value="false"),
             DeclareLaunchArgument("hardware_enable", default_value="false"),
             DeclareLaunchArgument("start_moveit", default_value="true"),

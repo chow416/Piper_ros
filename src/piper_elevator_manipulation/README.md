@@ -212,16 +212,18 @@ ros2 launch piper_elevator_manipulation elevator_scene.launch.py gazebo_gui:=tru
 
 ## Semantic button-perception adapter
 
-The pinned `external/robot-arm-perception` package now supplies semantic,
-tracked `vision_msgs/msg/Detection3DArray` messages on
-`/perception/button_targets_base`.  Each detection is already in `base_link`:
-its header carries the source observation time; its first hypothesis carries a
-semantic label such as `floor_4`; and its pose uses `+Z` as the inward press
-direction.
+The semantic target adapter consumes tracked `vision_msgs/msg/Detection3DArray`
+messages, normally on `/perception/button_targets_base`. Each detection must
+already be in `base_link`: its header carries the source observation time and
+its first hypothesis carries a semantic label such as `floor_4`. The only
+trusted geometric field in the current temporary integration is
+`results[0].pose.pose.position`.
 
 `button_target_selector.py` is the narrow adapter between that contract and
-this package. It never transforms the detection again. Instead, for a launch
-selected `target_semantic`, it:
+this package. It never transforms the detected position again. It ignores the
+incoming quaternion and constructs a valid pose whose local `+Z` is the
+configured fixed inward panel normal (`fixed_press_direction_x/y/z`, default
+`+X`). Instead, for a launch-selected `target_semantic`, it:
 
 - rejects a zero, stale, future, wrong-frame, missing, malformed, or ambiguous
   detection;
@@ -241,6 +243,10 @@ After both are healthy, the semantic task wrapper is:
 ros2 launch piper_elevator_manipulation press_button_semantic_hardware.launch.py \
   target_semantic:=floor_4 execute:=true hardware_enable:=true
 ```
+
+For a differently mounted fixed panel, override the configured direction, for
+example `fixed_press_direction_y:=-1.0`. This is a temporary substitute for a
+measured surface normal; it is valid only while the panel orientation is fixed.
 
 Use `execute:=false hardware_enable:=false` to inspect the composed software
 graph without allowing trajectory execution. The wrapper fixes

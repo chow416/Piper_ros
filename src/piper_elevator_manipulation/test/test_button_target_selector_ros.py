@@ -44,6 +44,15 @@ def target_array(stamp_ns, semantic="floor_4", target_id="track-4"):
     return message
 
 
+def local_z_axis(quaternion):
+    x, y, z, w = quaternion.x, quaternion.y, quaternion.z, quaternion.w
+    return (
+        2.0 * (x * z + y * w),
+        2.0 * (y * z - x * w),
+        1.0 - 2.0 * (x * x + y * y),
+    )
+
+
 class ButtonTargetSelectorRosTest(unittest.TestCase):
     """The public adapter contract is topics, not calls into the press node."""
 
@@ -61,6 +70,9 @@ class ButtonTargetSelectorRosTest(unittest.TestCase):
                 Parameter("refine_target_topic", value=self.refine_topic),
                 Parameter("target_semantic", value="floor_4"),
                 Parameter("max_age_s", value=1.0),
+                Parameter("fixed_press_direction_x", value=0.0),
+                Parameter("fixed_press_direction_y", value=-1.0),
+                Parameter("fixed_press_direction_z", value=0.0),
             ]
         )
         self.observer = Node(f"selector_contract_observer_{suffix}")
@@ -104,6 +116,10 @@ class ButtonTargetSelectorRosTest(unittest.TestCase):
         self.assertTrue(self.spin_until(lambda: len(self.coarse) == 1))
         self.assertEqual(len(self.refine), 0)
         self.assertEqual(self.coarse[0].header.frame_id, "base_link")
+        press_axis = local_z_axis(self.coarse[0].pose.orientation)
+        self.assertAlmostEqual(press_axis[0], 0.0)
+        self.assertAlmostEqual(press_axis[1], -1.0)
+        self.assertAlmostEqual(press_axis[2], 0.0)
 
         second_stamp = self.selector.get_clock().now().nanoseconds
         self.publisher.publish(target_array(second_stamp))

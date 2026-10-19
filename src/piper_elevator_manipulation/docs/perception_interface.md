@@ -12,15 +12,17 @@
 /perception/button_targets_base     vision_msgs/msg/Detection3DArray
 ```
 
-它已经使用观测时刻的 TF 和手眼标定把每个目标变换到 `base_link`。每个 detection
-包含稳定 `id`、语义标签（例如 `floor_4`）和 `+Z` 为向内按压方向的完整 pose。
-不要对它再做一次手眼变换或坐标补偿。
+临时接入只信任其中已经处于 `base_link` 的位置
+`results[0].pose.pose.position`，并保留稳定 `id`、语义标签（例如 `floor_4`）和
+观测时间。相机内外参、手眼和深度面法向尚未确认，因此输入四元数当前**不参与**
+规划；不要在这里再做一次手眼变换或坐标补偿。
 
-`button_target_selector.py` 用固定的 `target_semantic` 选择一个目标，并把同一 pose
-原样转发为：一次 `/press/target_pose` 粗目标，以及后续同 ID 的
-`/press/refine_pose` 精修正目标。首次同语义多目标、ID 丢失后多候选、坐标系不对、
-时间戳无效/过期/过早，都会拒绝而不是猜测。规划节点继续拥有最终可达性、碰撞、
-停稳时间戳和精修正融合的决定权。
+`button_target_selector.py` 用固定的 `target_semantic` 选择一个目标，并用启动参数
+`fixed_press_direction_x/y/z` 构造姿态：输出 pose 的 `+Z` 恒等于该固定、向内的面板
+法向（默认 `+X`）。它把位置加上这个姿态转发为一次 `/press/target_pose` 粗目标，
+以及后续同 ID 的 `/press/refine_pose` 精修正目标。首次同语义多目标、ID 丢失后多候选、
+坐标系不对、时间戳无效/过期/过早，都会拒绝而不是猜测。规划节点继续拥有最终
+可达性、碰撞、停稳时间戳和精修正融合的决定权。
 
 ## 一句话
 

@@ -8,7 +8,7 @@ selected detection to the press task's existing PoseStamped topics.
 
 from copy import deepcopy
 from dataclasses import dataclass
-from math import dist, isfinite
+from math import dist, isfinite, sqrt
 from typing import Optional
 
 import rclpy
@@ -50,10 +50,11 @@ class _Candidate:
 class FixedSemanticSelection:
     """Choose one fixed semantic target and retain its identity for refinement.
 
-    The input pose is already in ``base_link`` according to the perception
-    package contract.  This class intentionally copies it byte-for-byte into
-    ``PoseStamped`` rather than applying TF, offsets, or a second hand-eye
-    calibration.
+    The input position is already in ``base_link`` according to the perception
+    package contract.  This class copies that position and source timestamp
+    without TF, offsets, or a second hand-eye calibration. Its orientation is
+    constructed from the configured, fixed panel-normal direction so a
+    position-only detector never supplies an invented press axis.
     """
 
     def __init__(
@@ -63,6 +64,7 @@ class FixedSemanticSelection:
         max_age_s: float,
         future_tolerance_s: float,
         reacquire_distance_m: float,
+        fixed_press_direction: tuple[float, float, float] = (1.0, 0.0, 0.0),
     ):
         if not target_semantic:
             raise ValueError("target_semantic must be non-empty")
@@ -80,6 +82,7 @@ class FixedSemanticSelection:
         self.max_age_ns = int(max_age_s * 1_000_000_000)
         self.future_tolerance_ns = int(future_tolerance_s * 1_000_000_000)
         self.reacquire_distance_m = reacquire_distance_m
+        self.fixed_press_direction = self._normalized(fixed_press_direction)
         self._pending: Optional[_Candidate] = None
         self._coarse_sent = False
         self._locked_tracking_id: Optional[str] = None
@@ -206,12 +209,87 @@ class FixedSemanticSelection:
     def _stamp_ns(message: Detection3DArray) -> int:
         return message.header.stamp.sec * 1_000_000_000 + message.header.stamp.nanosec
 
-    @staticmethod
-    def _pose_from(message: Detection3DArray, result) -> PoseStamped:
+    def _pose_from(self, message: Detection3DArray, result) -> PoseStamped:
         pose = PoseStamped()
         pose.header = deepcopy(message.header)
-        pose.pose = deepcopy(result.pose.pose)
+        pose.pose.position = deepcopy(result.pose.pose.position)
+        (
+            pose.pose.orientation.x,
+            pose.pose.orientation.y,
+            pose.pose.orientation.z,
+            pose.pose.orientation.w,
+        ) = self._quaternion_with_local_z(self.fixed_press_direction)
         return pose
+
+    @staticmethod
+    def _normalized(vector) -> tuple[float, float, float]:
+        try:
+            values = tuple(float(value) for value in vector)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("fixed_press_direction must contain three numbers") from exc
+        if len(values) != 3 or not all(isfinite(value) for value in values):
+            raise ValueError("fixed_press_direction must be three finite numbers")
+        magnitude = sqrt(sum(value * value for value in values))
+        if magnitude <= 1.0e-9:
+            raise ValueError("fixed_press_direction must be non-zero")
+        return tuple(value / magnitude for value in values)
+
+    @classmethod
+    def _quaternion_with_local_z(cls, direction) -> tuple[float, float, float, float]:
+        """Build any rotation whose local +Z axis equals ``direction``.
+
+        The press rod is rotationally symmetric, so the free roll component is
+        chosen deterministically only to produce a valid quaternion.
+        """
+        z_axis = cls._normalized(direction)
+        helper = (1.0, 0.0, 0.0) if abs(z_axis[0]) < 0.9 else (0.0, 1.0, 0.0)
+        x_axis = cls._normalized(
+            (
+                helper[1] * z_axis[2] - helper[2] * z_axis[1],
+                helper[2] * z_axis[0] - helper[0] * z_axis[2],
+                helper[0] * z_axis[1] - helper[1] * z_axis[0],
+            )
+        )
+        y_axis = (
+            z_axis[1] * x_axis[2] - z_axis[2] * x_axis[1],
+            z_axis[2] * x_axis[0] - z_axis[0] * x_axis[2],
+            z_axis[0] * x_axis[1] - z_axis[1] * x_axis[0],
+        )
+        m00, m01, m02 = x_axis[0], y_axis[0], z_axis[0]
+        m10, m11, m12 = x_axis[1], y_axis[1], z_axis[1]
+        m20, m21, m22 = x_axis[2], y_axis[2], z_axis[2]
+        trace = m00 + m11 + m22
+        if trace > 0.0:
+            scale = sqrt(trace + 1.0) * 2.0
+            return (
+                (m21 - m12) / scale,
+                (m02 - m20) / scale,
+                (m10 - m01) / scale,
+                0.25 * scale,
+            )
+        if m00 > m11 and m00 > m22:
+            scale = sqrt(1.0 + m00 - m11 - m22) * 2.0
+            return (
+                0.25 * scale,
+                (m01 + m10) / scale,
+                (m02 + m20) / scale,
+                (m21 - m12) / scale,
+            )
+        if m11 > m22:
+            scale = sqrt(1.0 + m11 - m00 - m22) * 2.0
+            return (
+                (m01 + m10) / scale,
+                0.25 * scale,
+                (m12 + m21) / scale,
+                (m02 - m20) / scale,
+            )
+        scale = sqrt(1.0 + m22 - m00 - m11) * 2.0
+        return (
+            (m02 + m20) / scale,
+            (m12 + m21) / scale,
+            0.25 * scale,
+            (m10 - m01) / scale,
+        )
 
 
 class ButtonTargetSelectorNode(Node):
@@ -227,6 +305,9 @@ class ButtonTargetSelectorNode(Node):
         self.declare_parameter("max_age_s", 0.5)
         self.declare_parameter("future_tolerance_s", 0.05)
         self.declare_parameter("reacquire_distance_m", 0.04)
+        self.declare_parameter("fixed_press_direction_x", 1.0)
+        self.declare_parameter("fixed_press_direction_y", 0.0)
+        self.declare_parameter("fixed_press_direction_z", 0.0)
 
         parameter = lambda name: self.get_parameter(name).value
         self._processor = FixedSemanticSelection(
@@ -235,6 +316,11 @@ class ButtonTargetSelectorNode(Node):
             max_age_s=float(parameter("max_age_s")),
             future_tolerance_s=float(parameter("future_tolerance_s")),
             reacquire_distance_m=float(parameter("reacquire_distance_m")),
+            fixed_press_direction=(
+                float(parameter("fixed_press_direction_x")),
+                float(parameter("fixed_press_direction_y")),
+                float(parameter("fixed_press_direction_z")),
+            ),
         )
         self._coarse_publisher = self.create_publisher(
             PoseStamped, str(parameter("coarse_target_topic")), CONTRACT_QOS

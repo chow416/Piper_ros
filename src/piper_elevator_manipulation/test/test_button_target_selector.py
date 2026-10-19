@@ -7,6 +7,7 @@ without a camera, TF tree, MoveIt, or a real arm.
 """
 
 import importlib.util
+import math
 import unittest
 from pathlib import Path
 
@@ -52,6 +53,16 @@ def detection(
     return item
 
 
+def local_z_axis(quaternion):
+    """Return the world direction of a pose's local +Z axis."""
+    x, y, z, w = quaternion.x, quaternion.y, quaternion.z, quaternion.w
+    return (
+        2.0 * (x * z + y * w),
+        2.0 * (y * z - x * w),
+        1.0 - 2.0 * (x * x + y * y),
+    )
+
+
 class FixedSemanticSelectionValidationTest(unittest.TestCase):
     """Inputs outside the published perception contract must never move an arm."""
 
@@ -71,6 +82,17 @@ class FixedSemanticSelectionValidationTest(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             module.FixedSemanticSelection("", "base_link", 0.5, 0.05, 0.04)
+
+    def test_requires_a_finite_nonzero_fixed_press_direction(self):
+        """Position-only perception must not create an arbitrary press axis."""
+        module = load_selector_module()
+
+        for direction in ((0.0, 0.0, 0.0), (math.nan, 0.0, 1.0)):
+            with self.subTest(direction=direction):
+                with self.assertRaises(ValueError):
+                    module.FixedSemanticSelection(
+                        "floor_4", "base_link", 0.5, 0.05, 0.04, direction
+                    )
 
     def test_rejects_wrong_frame(self):
         """A camera-frame point must not be mistaken for a base-frame press point."""
@@ -225,16 +247,14 @@ class FixedSemanticSelectionLifecycleTest(unittest.TestCase):
         self.assertIsNone(decision.coarse)
         self.assertIsNone(decision.refine)
 
-    def test_preserves_pose_and_capture_stamp_exactly(self):
-        """The adapter must not apply a second hand-eye transform or a hidden offset."""
+    def test_preserves_position_and_stamp_but_replaces_perception_orientation(self):
+        """Position-only perception uses the configured panel-normal direction."""
         selector = self.selector()
         source = target_array(
             stamp_ns=10_000_000_000,
             detections=[detection(position=(0.31, -0.02, 0.26))],
         )
-        source.detections[0].results[0].pose.pose.orientation.x = 0.2
-        source.detections[0].results[0].pose.pose.orientation.z = 0.3
-        source.detections[0].results[0].pose.pose.orientation.w = 0.9
+        source.detections[0].results[0].pose.pose.orientation.w = 0.0
         coarse = selector.process(
             source, now_ns=10_000_000_000, coarse_subscriber_ready=True
         ).coarse
@@ -245,11 +265,9 @@ class FixedSemanticSelectionLifecycleTest(unittest.TestCase):
             (coarse.pose.position.x, coarse.pose.position.y, coarse.pose.position.z),
             (0.31, -0.02, 0.26),
         )
-        self.assertEqual(
-            (coarse.pose.orientation.x, coarse.pose.orientation.y,
-             coarse.pose.orientation.z, coarse.pose.orientation.w),
-            (0.2, 0.0, 0.3, 0.9),
-        )
+        self.assertAlmostEqual(local_z_axis(coarse.pose.orientation)[0], 1.0)
+        self.assertAlmostEqual(local_z_axis(coarse.pose.orientation)[1], 0.0)
+        self.assertAlmostEqual(local_z_axis(coarse.pose.orientation)[2], 0.0)
 
     def test_prefers_locked_tracking_id_over_a_higher_score_duplicate(self):
         """Once coarse planning starts, a confidence change cannot switch buttons."""
