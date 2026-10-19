@@ -210,8 +210,40 @@ Show Gazebo's own GUI as well (more CPU/GPU intensive):
 ros2 launch piper_elevator_manipulation elevator_scene.launch.py gazebo_gui:=true
 ```
 
-Perception is not part of the current planning/control baseline. The earlier
-neural-network study (`piper_button_perception`) was removed on 2026-09-28. The
-next perception effort targets a **calibration board** and publishes its result
-through the same `/press/target_pose` contract, so this package is unaffected by
-the change.
+## Semantic button-perception adapter
+
+The pinned `external/robot-arm-perception` package now supplies semantic,
+tracked `vision_msgs/msg/Detection3DArray` messages on
+`/perception/button_targets_base`.  Each detection is already in `base_link`:
+its header carries the source observation time; its first hypothesis carries a
+semantic label such as `floor_4`; and its pose uses `+Z` as the inward press
+direction.
+
+`button_target_selector.py` is the narrow adapter between that contract and
+this package. It never transforms the detection again. Instead, for a launch
+selected `target_semantic`, it:
+
+- rejects a zero, stale, future, wrong-frame, missing, malformed, or ambiguous
+  detection;
+- waits for the volatile `/press/target_pose` subscriber, then publishes one
+  coarse `PoseStamped` exactly once;
+- locks the perception tracking ID and forwards only strictly newer poses for
+  that same ID to `/press/refine_pose`; a tracker reset may re-acquire only one
+  same-semantic target within 4 cm of the coarse target.
+
+The existing press task consumes the coarse target and keeps its current
+stop-time refinement gate; the adapter does not bypass it. Camera/perception
+startup and real-arm/controller startup deliberately remain separate.
+
+After both are healthy, the semantic task wrapper is:
+
+```bash
+ros2 launch piper_elevator_manipulation press_button_semantic_hardware.launch.py \
+  target_semantic:=floor_4 execute:=true hardware_enable:=true
+```
+
+Use `execute:=false hardware_enable:=false` to inspect the composed software
+graph without allowing trajectory execution. The wrapper fixes
+`target_source:=topic`, `target_topic:=/press/target_pose`, and
+`max_presses:=1`; it does not start a camera, perception pipeline, CAN, or
+hardware bringup itself.

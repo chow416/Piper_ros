@@ -4,6 +4,24 @@
 > 代码和字段名保持英文，方便对照。
 > 对应实现：`src/target_source.cpp`、`scripts/send_press_target.py`。
 
+## 语义检测接入（当前推荐）
+
+`external/robot-arm-perception` 的最终输出不是直接写入本接口，而是先发布：
+
+```text
+/perception/button_targets_base     vision_msgs/msg/Detection3DArray
+```
+
+它已经使用观测时刻的 TF 和手眼标定把每个目标变换到 `base_link`。每个 detection
+包含稳定 `id`、语义标签（例如 `floor_4`）和 `+Z` 为向内按压方向的完整 pose。
+不要对它再做一次手眼变换或坐标补偿。
+
+`button_target_selector.py` 用固定的 `target_semantic` 选择一个目标，并把同一 pose
+原样转发为：一次 `/press/target_pose` 粗目标，以及后续同 ID 的
+`/press/refine_pose` 精修正目标。首次同语义多目标、ID 丢失后多候选、坐标系不对、
+时间戳无效/过期/过早，都会拒绝而不是猜测。规划节点继续拥有最终可达性、碰撞、
+停稳时间戳和精修正融合的决定权。
+
 ## 一句话
 
 往 **`/press/target_pose`** 发一条 `geometry_msgs/msg/PoseStamped`，
