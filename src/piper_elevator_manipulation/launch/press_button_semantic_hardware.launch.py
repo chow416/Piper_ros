@@ -32,6 +32,7 @@ def generate_launch_description():
     max_age_s = LaunchConfiguration("max_age_s")
     future_tolerance_s = LaunchConfiguration("future_tolerance_s")
     reacquire_distance_m = LaunchConfiguration("reacquire_distance_m")
+    press_direction_source = LaunchConfiguration("press_direction_source")
     fixed_press_direction_x = LaunchConfiguration("fixed_press_direction_x")
     fixed_press_direction_y = LaunchConfiguration("fixed_press_direction_y")
     fixed_press_direction_z = LaunchConfiguration("fixed_press_direction_z")
@@ -63,6 +64,7 @@ def generate_launch_description():
                 "reacquire_distance_m": ParameterValue(
                     reacquire_distance_m, value_type=float
                 ),
+                "press_direction_source": press_direction_source,
                 "fixed_press_direction_x": ParameterValue(
                     fixed_press_direction_x, value_type=float
                 ),
@@ -101,6 +103,13 @@ def generate_launch_description():
             DeclareLaunchArgument("max_age_s", default_value="0.5"),
             DeclareLaunchArgument("future_tolerance_s", default_value="0.05"),
             DeclareLaunchArgument("reacquire_distance_m", default_value="0.04"),
+            DeclareLaunchArgument(
+                "press_direction_source",
+                default_value="perception",
+                description="'perception' keeps the depth normal from the "
+                            "perception chain; 'fixed' uses the configured "
+                            "fixed_press_direction for debugging.",
+            ),
             DeclareLaunchArgument(
                 "fixed_press_direction_x",
                 default_value="1.0",

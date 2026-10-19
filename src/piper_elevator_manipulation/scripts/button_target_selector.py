@@ -64,6 +64,7 @@ class FixedSemanticSelection:
         max_age_s: float,
         future_tolerance_s: float,
         reacquire_distance_m: float,
+        press_direction_source: str = "perception",
         fixed_press_direction: tuple[float, float, float] = (1.0, 0.0, 0.0),
     ):
         if not target_semantic:
@@ -76,12 +77,15 @@ class FixedSemanticSelection:
             raise ValueError("future_tolerance_s must be non-negative")
         if reacquire_distance_m <= 0.0:
             raise ValueError("reacquire_distance_m must be greater than zero")
+        if press_direction_source not in ("perception", "fixed"):
+            raise ValueError("press_direction_source must be 'perception' or 'fixed'")
 
         self.target_semantic = target_semantic
         self.expected_frame = expected_frame
         self.max_age_ns = int(max_age_s * 1_000_000_000)
         self.future_tolerance_ns = int(future_tolerance_s * 1_000_000_000)
         self.reacquire_distance_m = reacquire_distance_m
+        self.press_direction_source = press_direction_source
         self.fixed_press_direction = self._normalized(fixed_press_direction)
         self._pending: Optional[_Candidate] = None
         self._coarse_sent = False
@@ -165,7 +169,13 @@ class FixedSemanticSelection:
             for result in detection.results:
                 if result.hypothesis.class_id != self.target_semantic:
                     continue
-                pose = self._pose_from(message, result)
+                if self.press_direction_source == "perception":
+                    orientation = self._validated_orientation(result)
+                    if orientation is None:
+                        continue
+                else:
+                    orientation = None
+                pose = self._pose_from(message, result, orientation)
                 position = (pose.pose.position.x, pose.pose.position.y, pose.pose.position.z)
                 if not all(isfinite(value) for value in position):
                     continue
@@ -178,6 +188,23 @@ class FixedSemanticSelection:
                     )
                 )
         return candidates, ""
+
+    @staticmethod
+    def _validated_orientation(result) -> Optional[tuple[float, float, float, float]]:
+        """The perception orientation, finite and normalised, or None.
+
+        The perception contract publishes the press normal as the local +Z of
+        the pose; an invalid quaternion can only be dropped, never replaced by
+        a fixed direction, so a vision failure is visible instead of silent.
+        """
+        quaternion = result.pose.pose.orientation
+        values = (quaternion.x, quaternion.y, quaternion.z, quaternion.w)
+        if not all(isfinite(value) for value in values):
+            return None
+        magnitude = sqrt(sum(value * value for value in values))
+        if magnitude <= 1.0e-9:
+            return None
+        return tuple(value / magnitude for value in values)
 
     def _locked_candidate(
         self, candidates: list[_Candidate]
@@ -209,16 +236,27 @@ class FixedSemanticSelection:
     def _stamp_ns(message: Detection3DArray) -> int:
         return message.header.stamp.sec * 1_000_000_000 + message.header.stamp.nanosec
 
-    def _pose_from(self, message: Detection3DArray, result) -> PoseStamped:
+    def _pose_from(self, message: Detection3DArray, result,
+                   orientation: Optional[tuple[float, float, float, float]]) -> PoseStamped:
         pose = PoseStamped()
         pose.header = deepcopy(message.header)
         pose.pose.position = deepcopy(result.pose.pose.position)
-        (
-            pose.pose.orientation.x,
-            pose.pose.orientation.y,
-            pose.pose.orientation.z,
-            pose.pose.orientation.w,
-        ) = self._quaternion_with_local_z(self.fixed_press_direction)
+        if self.press_direction_source == "perception":
+            # Keep the perception normal verbatim (already validated): no TF,
+            # no second hand-eye, no re-quaternionising.
+            (
+                pose.pose.orientation.x,
+                pose.pose.orientation.y,
+                pose.pose.orientation.z,
+                pose.pose.orientation.w,
+            ) = orientation
+        else:
+            (
+                pose.pose.orientation.x,
+                pose.pose.orientation.y,
+                pose.pose.orientation.z,
+                pose.pose.orientation.w,
+            ) = self._quaternion_with_local_z(self.fixed_press_direction)
         return pose
 
     @staticmethod
@@ -305,6 +343,7 @@ class ButtonTargetSelectorNode(Node):
         self.declare_parameter("max_age_s", 0.5)
         self.declare_parameter("future_tolerance_s", 0.05)
         self.declare_parameter("reacquire_distance_m", 0.04)
+        self.declare_parameter("press_direction_source", "perception")
         self.declare_parameter("fixed_press_direction_x", 1.0)
         self.declare_parameter("fixed_press_direction_y", 0.0)
         self.declare_parameter("fixed_press_direction_z", 0.0)
@@ -316,6 +355,7 @@ class ButtonTargetSelectorNode(Node):
             max_age_s=float(parameter("max_age_s")),
             future_tolerance_s=float(parameter("future_tolerance_s")),
             reacquire_distance_m=float(parameter("reacquire_distance_m")),
+            press_direction_source=str(parameter("press_direction_source")),
             fixed_press_direction=(
                 float(parameter("fixed_press_direction_x")),
                 float(parameter("fixed_press_direction_y")),

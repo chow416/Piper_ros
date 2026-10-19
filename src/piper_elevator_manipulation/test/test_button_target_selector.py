@@ -66,15 +66,17 @@ def local_z_axis(quaternion):
 class FixedSemanticSelectionValidationTest(unittest.TestCase):
     """Inputs outside the published perception contract must never move an arm."""
 
-    def selector(self):
+    def selector(self, **overrides):
         module = load_selector_module()
-        return module.FixedSemanticSelection(
+        settings = dict(
             target_semantic="floor_4",
             expected_frame="base_link",
             max_age_s=0.5,
             future_tolerance_s=0.05,
             reacquire_distance_m=0.04,
         )
+        settings.update(overrides)
+        return module.FixedSemanticSelection(**settings)
 
     def test_requires_nonempty_target_semantic(self):
         """An empty task choice must fail at configuration time, not select all buttons."""
@@ -155,15 +157,17 @@ class FixedSemanticSelectionValidationTest(unittest.TestCase):
 class FixedSemanticSelectionLifecycleTest(unittest.TestCase):
     """A continuous perception stream must trigger exactly one press cycle."""
 
-    def selector(self):
+    def selector(self, **overrides):
         module = load_selector_module()
-        return module.FixedSemanticSelection(
+        settings = dict(
             target_semantic="floor_4",
             expected_frame="base_link",
             max_age_s=0.5,
             future_tolerance_s=0.05,
             reacquire_distance_m=0.04,
         )
+        settings.update(overrides)
+        return module.FixedSemanticSelection(**settings)
 
     def test_selects_only_the_requested_unique_semantic(self):
         """A visible but unrequested floor must never win target selection."""
@@ -247,9 +251,47 @@ class FixedSemanticSelectionLifecycleTest(unittest.TestCase):
         self.assertIsNone(decision.coarse)
         self.assertIsNone(decision.refine)
 
-    def test_preserves_position_and_stamp_but_replaces_perception_orientation(self):
-        """Position-only perception uses the configured panel-normal direction."""
+    def test_perception_source_keeps_or_drops_the_perception_orientation(self):
+        """Perception mode keeps a valid normal and drops an invalid one.
+
+        An invalid quaternion must never be replaced silently by the fixed
+        direction: that would hide a vision failure behind a plausible press.
+        """
+        selector = self.selector()  # default press_direction_source=perception
+        source = target_array(
+            stamp_ns=10_000_000_000,
+            detections=[detection(position=(0.31, -0.02, 0.26))],
+        )
+        source.detections[0].results[0].pose.pose.orientation.w = 0.0
+        decision = selector.process(
+            source, now_ns=10_000_000_000, coarse_subscriber_ready=True
+        )
+        self.assertIsNone(decision.coarse)
+
+        # A valid perception orientation is kept verbatim with position+stamp.
         selector = self.selector()
+        source = target_array(
+            stamp_ns=10_000_000_000,
+            detections=[detection(position=(0.31, -0.02, 0.26))],
+        )
+        coarse = selector.process(
+            source, now_ns=10_000_000_000, coarse_subscriber_ready=True
+        ).coarse
+
+        self.assertEqual(coarse.header.frame_id, "base_link")
+        self.assertEqual((coarse.header.stamp.sec, coarse.header.stamp.nanosec), (10, 0))
+        self.assertEqual(
+            (coarse.pose.position.x, coarse.pose.position.y, coarse.pose.position.z),
+            (0.31, -0.02, 0.26),
+        )
+        # detection() sets w=1.0: local +Z is the world +Z, kept, not replaced
+        self.assertAlmostEqual(local_z_axis(coarse.pose.orientation)[0], 0.0)
+        self.assertAlmostEqual(local_z_axis(coarse.pose.orientation)[1], 0.0)
+        self.assertAlmostEqual(local_z_axis(coarse.pose.orientation)[2], 1.0)
+
+    def test_fixed_source_replaces_perception_orientation(self):
+        """Fixed mode is the explicit debug fallback, never the default."""
+        selector = self.selector(press_direction_source="fixed")
         source = target_array(
             stamp_ns=10_000_000_000,
             detections=[detection(position=(0.31, -0.02, 0.26))],
@@ -259,8 +301,7 @@ class FixedSemanticSelectionLifecycleTest(unittest.TestCase):
             source, now_ns=10_000_000_000, coarse_subscriber_ready=True
         ).coarse
 
-        self.assertEqual(coarse.header.frame_id, "base_link")
-        self.assertEqual((coarse.header.stamp.sec, coarse.header.stamp.nanosec), (10, 0))
+        self.assertIsNotNone(coarse)
         self.assertEqual(
             (coarse.pose.position.x, coarse.pose.position.y, coarse.pose.position.z),
             (0.31, -0.02, 0.26),
