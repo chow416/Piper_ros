@@ -11,8 +11,21 @@ from dataclasses import dataclass
 from math import dist, isfinite
 from typing import Optional
 
+import rclpy
 from geometry_msgs.msg import PoseStamped
+from rclpy.node import Node
+from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from vision_msgs.msg import Detection3DArray
+
+
+# The press task waits on a volatile, reliable topic.  Keeping that contract
+# here avoids replaying an old press target whenever the task is restarted.
+CONTRACT_QOS = QoSProfile(
+    reliability=ReliabilityPolicy.RELIABLE,
+    history=HistoryPolicy.KEEP_LAST,
+    depth=1,
+    durability=DurabilityPolicy.VOLATILE,
+)
 
 
 @dataclass(frozen=True)
@@ -199,3 +212,93 @@ class FixedSemanticSelection:
         pose.header = deepcopy(message.header)
         pose.pose = deepcopy(result.pose.pose)
         return pose
+
+
+class ButtonTargetSelectorNode(Node):
+    """ROS adapter from semantic base-frame detections to the press topics."""
+
+    def __init__(self, **kwargs):
+        super().__init__("button_target_selector", **kwargs)
+        self.declare_parameter("input_topic", "/perception/button_targets_base")
+        self.declare_parameter("coarse_target_topic", "/press/target_pose")
+        self.declare_parameter("refine_target_topic", "/press/refine_pose")
+        self.declare_parameter("target_semantic", "floor_4")
+        self.declare_parameter("expected_frame", "base_link")
+        self.declare_parameter("max_age_s", 0.5)
+        self.declare_parameter("future_tolerance_s", 0.05)
+        self.declare_parameter("reacquire_distance_m", 0.04)
+
+        parameter = lambda name: self.get_parameter(name).value
+        self._processor = FixedSemanticSelection(
+            target_semantic=str(parameter("target_semantic")),
+            expected_frame=str(parameter("expected_frame")),
+            max_age_s=float(parameter("max_age_s")),
+            future_tolerance_s=float(parameter("future_tolerance_s")),
+            reacquire_distance_m=float(parameter("reacquire_distance_m")),
+        )
+        self._coarse_publisher = self.create_publisher(
+            PoseStamped, str(parameter("coarse_target_topic")), CONTRACT_QOS
+        )
+        self._refine_publisher = self.create_publisher(
+            PoseStamped, str(parameter("refine_target_topic")), CONTRACT_QOS
+        )
+        self._subscription = self.create_subscription(
+            Detection3DArray,
+            str(parameter("input_topic")),
+            self._on_targets,
+            CONTRACT_QOS,
+        )
+        self._cached_message: Optional[Detection3DArray] = None
+        self._last_reason = ""
+        self._retry_timer = self.create_timer(0.05, self._retry_cached_coarse)
+        self.get_logger().info(
+            "semantic selector ready: %s -> %s (refine: %s, semantic: %s)"
+            % (
+                parameter("input_topic"),
+                parameter("coarse_target_topic"),
+                parameter("refine_target_topic"),
+                parameter("target_semantic"),
+            )
+        )
+
+    def _on_targets(self, message: Detection3DArray) -> None:
+        self._cached_message = deepcopy(message)
+        self._process(message)
+
+    def _retry_cached_coarse(self) -> None:
+        if self._cached_message is None or self._processor._coarse_sent:
+            return
+        self._process(self._cached_message)
+
+    def _process(self, message: Detection3DArray) -> None:
+        decision = self._processor.process(
+            message,
+            now_ns=self.get_clock().now().nanoseconds,
+            coarse_subscriber_ready=self._coarse_publisher.get_subscription_count() > 0,
+        )
+        if decision.coarse is not None:
+            self._coarse_publisher.publish(decision.coarse)
+            self.get_logger().info(
+                f"published one coarse press target for {self._processor.target_semantic}"
+            )
+            return
+        if decision.refine is not None:
+            self._refine_publisher.publish(decision.refine)
+            return
+        if decision.reason != self._last_reason:
+            self._last_reason = decision.reason
+            self.get_logger().debug(f"target not forwarded: {decision.reason}")
+
+
+def main(args=None) -> None:
+    rclpy.init(args=args)
+    node = ButtonTargetSelectorNode()
+    try:
+        rclpy.spin(node)
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
+
+
+if __name__ == "__main__":
+    main()

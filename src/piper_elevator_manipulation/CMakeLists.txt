@@ -62,7 +62,7 @@ ament_target_dependencies(virtual_contact_sim
 
 install(TARGETS press_button_demo virtual_contact_sim DESTINATION lib/${PROJECT_NAME})
 install(PROGRAMS scripts/go_home.py scripts/send_press_target.py
-        scripts/preflight_check.py
+        scripts/preflight_check.py scripts/button_target_selector.py
         DESTINATION lib/${PROJECT_NAME})
 install(DIRECTORY launch docs config DESTINATION share/${PROJECT_NAME})
 install(FILES README.md DESTINATION share/${PROJECT_NAME})
@@ -70,6 +70,8 @@ install(FILES README.md DESTINATION share/${PROJECT_NAME})
 if(BUILD_TESTING)
   find_package(ament_cmake_pytest REQUIRED)
   ament_add_pytest_test(test_preflight_check test/test_preflight_check.py)
+  ament_add_pytest_test(test_button_target_selector test/test_button_target_selector.py)
+  ament_add_pytest_test(test_button_target_selector_ros test/test_button_target_selector_ros.py)
 endif()
 
 ament_package()

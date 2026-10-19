@@ -18,6 +18,8 @@
   <depend>sensor_msgs</depend>
   <depend>std_msgs</depend>
   <depend>tf2_eigen</depend>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>vision_msgs</exec_depend>
 
   <exec_depend>piper_gazebo</exec_depend>
   <exec_depend>piper_press_moveit</exec_depend>
