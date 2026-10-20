@@ -100,7 +100,7 @@ def generate_launch_description():
                 "input_topic", default_value="/perception/button_targets_base"
             ),
             DeclareLaunchArgument("expected_frame", default_value="base_link"),
-            DeclareLaunchArgument("max_age_s", default_value="0.5"),
+            DeclareLaunchArgument("max_age_s", default_value="1.5"),
             DeclareLaunchArgument("future_tolerance_s", default_value="0.05"),
             DeclareLaunchArgument("reacquire_distance_m", default_value="0.04"),
             DeclareLaunchArgument(

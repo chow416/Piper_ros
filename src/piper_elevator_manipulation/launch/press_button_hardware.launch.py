@@ -156,7 +156,7 @@ def generate_launch_description():
             ),
         ),
         DeclareLaunchArgument(
-            "target_max_age_s", default_value="1.0",
+            "target_max_age_s", default_value="2.0",
             description=("Reject a target whose header.stamp is older than this."),
         ),
         DeclareLaunchArgument(
