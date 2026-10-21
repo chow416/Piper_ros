@@ -38,6 +38,7 @@ def generate_launch_description():
     fixed_press_direction_z = LaunchConfiguration("fixed_press_direction_z")
     execute = LaunchConfiguration("execute")
     hardware_enable = LaunchConfiguration("hardware_enable")
+    max_presses = LaunchConfiguration("max_presses")
     start_moveit = LaunchConfiguration("start_moveit")
     scene_wait_s = LaunchConfiguration("scene_wait_s")
     rviz = LaunchConfiguration("rviz")
@@ -83,7 +84,9 @@ def generate_launch_description():
         launch_arguments={
             "target_source": "topic",
             "target_topic": "/press/target_pose",
-            "max_presses": "1",
+            # 0 = 常驻, 每次收到一个目标就规划+执行一轮
+            # (预热模式靠这个把 move_group 的启动开销只付一次)
+            "max_presses": max_presses,
             "execute": execute,
             "hardware_enable": hardware_enable,
             "start_moveit": start_moveit,
@@ -127,6 +130,8 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument("execute", default_value="false"),
             DeclareLaunchArgument("hardware_enable", default_value="false"),
+            # 1 = 按一次就退出; 0 = 常驻, 每收到一个目标执行一轮(预热模式)
+            DeclareLaunchArgument("max_presses", default_value="1"),
             DeclareLaunchArgument("start_moveit", default_value="true"),
             DeclareLaunchArgument("scene_wait_s", default_value="0.0"),
             DeclareLaunchArgument("rviz", default_value="true"),
