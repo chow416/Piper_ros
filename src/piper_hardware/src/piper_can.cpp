@@ -119,8 +119,13 @@ bool PiperCan::write(const Frame& frame, std::string* error) {
 
   const ssize_t bytes = ::write(socket_, &native, sizeof(native));
   if (bytes != static_cast<ssize_t>(sizeof(native))) {
-    if (errno == EAGAIN || errno == EWOULDBLOCK) {
-      // The transmit queue is momentarily full; the caller retries next cycle.
+    // A full SocketCAN transmit queue reports ENOBUFS (not EAGAIN — EAGAIN is
+    // for a full socket buffer). Both are transient: the control loop resends a
+    // fresh command a few ms later, so a skipped frame costs nothing.
+    // Returning an empty *error marks it as transient for the caller; putting a
+    // message here makes PiperSystem::write() abort the hardware component.
+    if (errno == EAGAIN || errno == EWOULDBLOCK || errno == ENOBUFS || errno == EINTR) {
+      error->clear();
       return false;
     }
     *error = errnoMessage("write(CAN)");

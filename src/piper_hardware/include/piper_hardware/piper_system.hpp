@@ -128,6 +128,10 @@ class PiperSystem final : public hardware_interface::SystemInterface {
   bool feedback_warned_{false};
   std::chrono::steady_clock::time_point last_feedback_time_{};
   std::string last_error_;
+  // 发送队列一时满（SocketCAN 返回 ENOBUFS/EAGAIN）是正常的，但不能一直满。
+  // 连续这么多个控制周期都发不出去才算真故障。
+  int transient_write_failures_{0};
+  static constexpr int kMaxTransientWriteFailures = 40;
 
   // A steady clock is used for the throttled diagnostics because ROS time can
   // be paused or jumped, which would break throttling on a hardware driver.

@@ -635,6 +635,17 @@ hardware_interface::return_type PiperSystem::write(const rclcpp::Time& /*time*/,
   // still ignored joint commands entirely. Repeating the mode frame makes the
   // commands take effect.
   if (!sendMotionMode(&error)) {
+    // 空 error = 发送队列一时满，不是硬件故障：跳过这个周期，下个周期会重发
+    // 新的指令（5 ms 后），丢一帧没有任何影响。之前这里一律返回 ERROR，于是
+    // 一次队列抖动就把整个硬件组件打成 error —— 命令接口全变 [unavailable]，
+    // 现场表现就是"臂突然不动了"，只能重启使能。
+    if (error.empty() && ++transient_write_failures_ <= kMaxTransientWriteFailures) {
+      return hardware_interface::return_type::OK;
+    }
+    if (error.empty()) {
+      error = "CAN transmit queue stayed full for " +
+              std::to_string(transient_write_failures_) + " control cycles";
+    }
     last_error_ = error;
     RCLCPP_ERROR_THROTTLE(rclcpp::get_logger(kLoggerName), *clock_, 2000,
                           "CAN mode write failed: %s", error.c_str());
@@ -642,11 +653,19 @@ hardware_interface::return_type PiperSystem::write(const rclcpp::Time& /*time*/,
   }
 
   if (!sendJointCommand(target, &error)) {
+    if (error.empty() && ++transient_write_failures_ <= kMaxTransientWriteFailures) {
+      return hardware_interface::return_type::OK;
+    }
+    if (error.empty()) {
+      error = "CAN transmit queue stayed full for " +
+              std::to_string(transient_write_failures_) + " control cycles";
+    }
     last_error_ = error;
     RCLCPP_ERROR_THROTTLE(rclcpp::get_logger(kLoggerName), *clock_, 2000,
                           "CAN write failed: %s", error.c_str());
     return hardware_interface::return_type::ERROR;
   }
+  transient_write_failures_ = 0;
   return hardware_interface::return_type::OK;
 }
 
