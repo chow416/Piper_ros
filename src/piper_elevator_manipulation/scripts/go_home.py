@@ -59,21 +59,31 @@ def radians_to_degrees(value: float) -> float:
     return value * 180.0 / math.pi
 
 
-def load_home_pose(path: Path) -> dict[str, float]:
+# 段落名 -> YAML 里的 section。厅外呼梯键和轿厢内按键高度不同，各用一套 HOME：
+# 臂先摆到接近目标高度的位置，按压规划就不用从很远的地方起算。
+POSE_SECTIONS = {"mid": "home_pose", "low": "home_low", "high": "home_high"}
+
+
+def load_home_pose(path: Path, variant: str = "mid") -> dict[str, float]:
     if not path.is_file():
         raise RuntimeError(f"home pose file not found: {path}")
+    section = POSE_SECTIONS.get(variant)
+    if section is None:
+        raise RuntimeError(f"unknown pose variant '{variant}' "
+                           f"(choose from {sorted(POSE_SECTIONS)})")
     with path.open("r", encoding="utf-8") as handle:
         document = yaml.safe_load(handle)
-    if not isinstance(document, dict) or "home_pose" not in document:
-        raise RuntimeError(f"{path} has no 'home_pose' section")
-    raw = document["home_pose"]
+    if not isinstance(document, dict) or section not in document:
+        raise RuntimeError(f"{path} has no '{section}' section "
+                           f"(run tools/home_variants.py to generate it)")
+    raw = document[section]
     if not isinstance(raw, dict):
         raise RuntimeError(f"{path}: 'home_pose' must be a mapping")
 
     pose: dict[str, float] = {}
     for name in JOINT_NAMES:
         if name not in raw:
-            raise RuntimeError(f"{path}: 'home_pose' is missing {name}")
+            raise RuntimeError(f"{path}: '{section}' is missing {name}")
         value = float(raw[name])
         if not math.isfinite(value):
             raise RuntimeError(f"{path}: {name} is not finite")
@@ -186,6 +196,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--duration", type=float, default=8.0,
                         help="Travel time in seconds. Longer is gentler.")
     parser.add_argument("--controller", default="arm_controller")
+    parser.add_argument("--pose", choices=sorted(POSE_SECTIONS), default="mid",
+                        help="Which home to go to: mid (default), low (hall "
+                             "buttons lower), high (cabin panel higher).")
     parser.add_argument("--dry-run", action="store_true",
                         help="Validate and print the pose without moving.")
     return parser
@@ -197,8 +210,8 @@ def main() -> int:
     rclpy.init()
     node = GoHome(args.controller)
     try:
-        home = load_home_pose(args.config)
-        print(f"\nhome pose from {args.config}:")
+        home = load_home_pose(args.config, args.pose)
+        print(f"\n{args.pose} home pose from {args.config}:")
         describe_pose(home)
 
         node.wait_for_server(15.0)
