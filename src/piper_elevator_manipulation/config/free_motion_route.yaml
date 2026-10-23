@@ -28,7 +28,7 @@ piper_press_button_demo:
       # The approach still ends `contact_standoff_m` short of the aim and the
       # trajectory terminates there, so nothing about that leg touches the
       # panel more firmly -- it just gets there sooner.
-      approach_speed_scaling: 0.20
+      approach_speed_scaling: 0.2
       # The press is the only phase that touches anything and there is no
       # force sensor. 0.02 was picked when the press travelled 3 mm; it now
       # travels 20 mm (press_params.yaml), so the old "under a second anyway"
@@ -44,7 +44,7 @@ piper_press_button_demo:
       # NOT change the retreat seen during a normal press -- approach does.
       # Wiring retreat to its own planner is a separate change; until then this
       # keeps the recovery path in step with the approach speed.
-      retreat_speed_scaling: 0.20
+      retreat_speed_scaling: 0.2
     press_timeout_s: 15.0
     free_motion:
       route_name: tabletop_staging

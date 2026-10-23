@@ -198,6 +198,30 @@ int main(int argc, char** argv) {
   std::string reported_params;
   bool overlap_warned = false;
   while (rclcpp::ok() && (max_presses == 0 || press_count < max_presses)) {
+    PressTaskParameters parameters;
+    if (targets_from_topic) {
+      // Wait BEFORE taking the parameter snapshot: edits made while idle must
+      // affect this target, not the following one. Keep one snapshot per task.
+      target_channel->discardPendingTarget();
+      const auto target = waitForTarget(
+          node, *target_channel,
+          getOrDeclareParameter(node, "target_wait_timeout_s", 0.0));
+      if (!target.has_value()) {
+        exit_code = 1;
+        break;
+      }
+      parameters.target_position = target->position;
+      parameters.press_direction = target->press_direction;
+    } else {
+      parameters.target_position = Eigen::Vector3d(
+          getOrDeclareParameter(node, "button_x", 0.300),
+          getOrDeclareParameter(node, "button_y", 0.000),
+          getOrDeclareParameter(node, "button_z", 0.240));
+      parameters.press_direction = Eigen::Vector3d(
+          getOrDeclareParameter(node, "press_direction_x", 1.0),
+          getOrDeclareParameter(node, "press_direction_y", 0.0),
+          getOrDeclareParameter(node, "press_direction_z", 0.0));
+    }
     // Re-read the editable file every press so an edit lands on the next one
     // without restarting the service. The ROS parameters stay as the fallback,
     // so a missing or broken file behaves exactly as it did before the file
@@ -286,37 +310,9 @@ int main(int argc, char** argv) {
                   press_params_file.c_str());
     }
 
-    PressTaskParameters parameters;
-    if (targets_from_topic) {
-      // Drop anything that arrived while the arm was moving. A target observed
-      // behind the arm is not worth reusing, and this keeps each press tied to
-      // a fresh observation instead of to whatever the queue happened to hold.
-      target_channel->discardPendingTarget();
-      const auto target = waitForTarget(
-          node, *target_channel,
-          getOrDeclareParameter(node, "target_wait_timeout_s", 0.0));
-      if (!target.has_value()) {
-        exit_code = 1;
-        break;
-      }
-      parameters.target_position = target->position;
-      parameters.press_direction = target->press_direction;
-      parameters.approach_distance = approach;
-      parameters.contact_standoff = standoff;
-      parameters.press_depth = depth;
-    } else {
-      parameters =
-          PressTaskParameters{
-              Eigen::Vector3d(
-                  getOrDeclareParameter(node, "button_x", 0.300),
-                  getOrDeclareParameter(node, "button_y", 0.000),
-                  getOrDeclareParameter(node, "button_z", 0.240)),
-              Eigen::Vector3d(
-                  getOrDeclareParameter(node, "press_direction_x", 1.0),
-                  getOrDeclareParameter(node, "press_direction_y", 0.0),
-                  getOrDeclareParameter(node, "press_direction_z", 0.0)),
-              approach, standoff, depth};
-    }
+    parameters.approach_distance = approach;
+    parameters.contact_standoff = standoff;
+    parameters.press_depth = depth;
 
     if (!validatePressParameters(node, parameters)) {
       exit_code = 2;
