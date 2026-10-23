@@ -50,8 +50,17 @@ int runToPrePress(const rclcpp::Node::SharedPtr& node,
     }
     RCLCPP_INFO(node->get_logger(), "Executing phase: %s (planned %.2f s)",
                 motion.stage_name.c_str(), plannedSeconds(motion.trajectory));
+    const auto phase_started = std::chrono::steady_clock::now();
     const auto result = executor.execute(
         motion.trajectory, motionTimeout(motion.trajectory));
+    // 实测耗时：调速度参数时唯一能验证"到底快了多少"的数字。
+    // planned 是时间参数化算出来的，实际会被控制器跟踪误差 / 固件限速拉开差距，
+    // 两者的差就是"参数改了但没变快"的信号。
+    const double actual_s = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - phase_started).count();
+    RCLCPP_INFO(node->get_logger(), "  -> %s took %.2f s (planned %.2f s)",
+                motion.stage_name.c_str(), actual_s,
+                plannedSeconds(motion.trajectory));
     if (result.status !=
         piper_elevator_manipulation::ExecutionStatus::completed) {
       RCLCPP_ERROR(node->get_logger(), "CONTROLLER_FAILED at %s: %s",
@@ -111,8 +120,14 @@ int executeFromPrePress(const rclcpp::Node::SharedPtr& node,
     reached_approach = true;
     RCLCPP_INFO(node->get_logger(), "Executing phase: %s (planned %.2f s)",
                 motion.stage_name.c_str(), plannedSeconds(motion.trajectory));
+    const auto phase_started = std::chrono::steady_clock::now();
     const auto result = executor.execute(
         motion.trajectory, motionTimeout(motion.trajectory));
+    const double actual_s = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - phase_started).count();
+    RCLCPP_INFO(node->get_logger(), "  -> %s took %.2f s (planned %.2f s)",
+                motion.stage_name.c_str(), actual_s,
+                plannedSeconds(motion.trajectory));
     if (result.status !=
         piper_elevator_manipulation::ExecutionStatus::completed) {
       RCLCPP_ERROR(node->get_logger(), "CONTROLLER_FAILED at %s: %s",
