@@ -10,9 +10,19 @@ The pose comes from `config/home_pose.yaml`. Values are validated against the
 arm protocol limits before anything is sent, and warnings are printed for values
 that fall outside the recommended range.
 
+How long the move takes is sized from the distance, not fixed:
+
+    duration = 1s lead + (largest joint motion / --deg-per-sec)
+    clamped to [2.5, 8.0] s
+
+15 deg/s is half the speed the press task's own free-motion segment runs at
+(34 deg/s), and the 8 s ceiling is the old fixed value -- so auto-sizing can
+only ever be faster than before, never slower. Pass --duration to pin it.
+
     ros2 run piper_elevator_manipulation go_home.py --dry-run
     ros2 run piper_elevator_manipulation go_home.py
-    ros2 run piper_elevator_manipulation go_home.py --duration 12
+    ros2 run piper_elevator_manipulation go_home.py --deg-per-sec 10   # gentler
+    ros2 run piper_elevator_manipulation go_home.py --duration 12      # pinned
 
 ⚠️ The executable keeps its `.py` suffix: it is installed with
 `install(PROGRAMS scripts/go_home.py ...)`, and that keeps the file name.
@@ -53,6 +63,36 @@ PROTOCOL_LIMITS = {
 }
 # Margin kept from every stop by the recommended home range.
 HOME_MARGIN_RAD = 0.2618  # 15 degrees
+
+# ── 回 HOME 的时长：按走了多远来定，不再一刀切 8 s ───────────────────────────
+# 固定 8 s 的代价是"离得近也照样磨 8 秒"：臂只差 5 deg 也要等满，而大范围回位
+# 反而显得正常。改成按最大关节位移折算，速度上限取 AUTO_DEG_PER_SEC。
+#
+# 上限 AUTO_MAX_S 沿用历史默认值 8 s，所以**自动模式只会更快，不会比原来更慢**；
+# 下限 AUTO_MIN_S 是给"本来就差不多在 HOME"的情况留一点起步余量。
+#
+# send() 里的第一个路径点固定在 t=AUTO_LEAD_S（重述当前实测位姿），所以真正
+# 走路的时间是 duration − AUTO_LEAD_S。
+AUTO_DEG_PER_SEC = 15.0   # 比按压自由运动段的 34 deg/s 保守一半
+AUTO_LEAD_S = 1.0
+AUTO_MIN_S = 2.5
+AUTO_MAX_S = 8.0          # 历史默认值：自动模式不会比它更慢
+
+
+def choose_duration(target: dict[str, float], current: dict[str, float],
+                    args) -> tuple[float, str]:
+    """返回 (时长, 依据)。给 --duration 就用它，否则按最大关节位移折算。"""
+    if args.duration is not None:
+        return args.duration, f"--duration 指定"
+    largest = max(abs(target[name] - current[name]) for name in JOINT_NAMES)
+    largest_deg = radians_to_degrees(largest)
+    auto = AUTO_LEAD_S + largest_deg / max(1e-6, args.deg_per_sec)
+    duration = min(AUTO_MAX_S, max(AUTO_MIN_S, auto))
+    why = (f"最大关节位移 {largest_deg:.1f} deg ÷ {args.deg_per_sec:.0f} deg/s "
+           f"+ {AUTO_LEAD_S:.1f}s 起步 = {auto:.1f}s")
+    if duration != auto:
+        why += f"，夹到 [{AUTO_MIN_S:.1f}, {AUTO_MAX_S:.1f}] 内"
+    return duration, why
 
 
 def radians_to_degrees(value: float) -> float:
@@ -193,8 +233,11 @@ def build_parser() -> argparse.ArgumentParser:
         / "home_pose.yaml",
         help="Home pose YAML file.",
     )
-    parser.add_argument("--duration", type=float, default=8.0,
-                        help="Travel time in seconds. Longer is gentler.")
+    parser.add_argument("--duration", type=float, default=None,
+                        help="固定时长（秒）。不给就按最大关节位移自动定。")
+    parser.add_argument("--deg-per-sec", type=float, default=AUTO_DEG_PER_SEC,
+                        help=f"自动定时长时的目标关节速度（默认 {AUTO_DEG_PER_SEC:.0f} deg/s，"
+                             "比按压自由运动段的 34 deg/s 保守得多）。")
     parser.add_argument("--controller", default="arm_controller")
     parser.add_argument("--pose", choices=sorted(POSE_SECTIONS), default="mid",
                         help="Which home to go to: mid (default), low (hall "
@@ -222,10 +265,14 @@ def main() -> int:
                   f"({radians_to_degrees(current[name]):+8.2f} deg)")
 
         if args.dry_run:
-            print("\ndry run: nothing was sent.")
+            duration, why = choose_duration(home, current, args)
+            print(f"\nplanned travel time: {duration:.1f} s（{why}）")
+            print("dry run: nothing was sent.")
             return 0
 
-        result = node.send(home, args.duration)
+        duration, why = choose_duration(home, current, args)
+        print(f"\ntravel time: {duration:.1f} s（{why}）")
+        result = node.send(home, duration)
         print(f"\nresult error_code = {result.error_code}  ({result.error_string or 'ok'})")
         if result.error_code != FollowJointTrajectory.Result.SUCCESSFUL:
             print("home trajectory did NOT report success", file=sys.stderr)
